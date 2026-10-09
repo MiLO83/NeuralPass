@@ -250,6 +250,50 @@ bool MaterialTextureAtlas::has_coverage(float u, float v, bool wrap_u, bool wrap
     return false;
 }
 
+std::vector<MaterialTextureMip> MaterialTextureAtlas::generate_mips() const {
+    std::vector<MaterialTextureMip> result;
+    if (color_.empty()) return result;
+    result.push_back({color_, coverage_});
+    while (result.back().color.width() > 1 || result.back().color.height() > 1) {
+        const auto &source = result.back();
+        const auto width = (source.color.width() + 1) / 2;
+        const auto height = (source.color.height() + 1) / 2;
+        MaterialTextureMip next {
+            Image<Color>(width, height, kUnpaintedColor),
+            Image<std::uint8_t>(width, height, kUnseen)};
+        for (std::uint32_t y = 0; y < height; ++y) {
+            for (std::uint32_t x = 0; x < width; ++x) {
+                Color sum {};
+                std::uint32_t count = 0;
+                std::uint8_t provenance = kObserved;
+                bool complete = true;
+                for (std::uint32_t oy = 0; oy < 2; ++oy) {
+                    for (std::uint32_t ox = 0; ox < 2; ++ox) {
+                        const auto sx = x * 2 + ox;
+                        const auto sy = y * 2 + oy;
+                        // Odd edge texels represent a smaller true footprint;
+                        // absent children do not make that footprint incomplete.
+                        if (sx >= source.color.width() || sy >= source.color.height()) continue;
+                        const auto coverage = source.coverage.at(sx, sy);
+                        if (coverage == kUnseen) { complete = false; continue; }
+                        const auto value = source.color.at(sx, sy);
+                        sum.r += value.r; sum.g += value.g; sum.b += value.b; sum.a += value.a;
+                        provenance = std::min(provenance, coverage);
+                        ++count;
+                    }
+                }
+                if (!complete || count == 0) continue;
+                const float divisor = static_cast<float>(count);
+                next.color.at(x, y) = {sum.r/divisor, sum.g/divisor,
+                                       sum.b/divisor, sum.a/divisor};
+                next.coverage.at(x, y) = provenance;
+            }
+        }
+        result.push_back(std::move(next));
+    }
+    return result;
+}
+
 Image<Color> reconstruct_from_atlas(
     const Image<Color> &fallback, const MaterialTextureAtlas &atlas,
     std::span<const SurfaceCorrespondence> correspondence) {

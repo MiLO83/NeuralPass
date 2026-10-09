@@ -66,7 +66,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     Evidence: explicit atlas coverage states, provenance commit test, and cache format test.
 [x] Let later direct observations supersede inpainted texels.
     Evidence: direct-observation supersession test also verifies preserved source alpha.
-[ ] Generate mips without expanding semantic coverage into unseen regions.
+[x] Generate mips without expanding semantic coverage into unseen regions.
+    Evidence: conservative all-children coverage/provenance mip generator and
+    partial-footprint leakage test.
 [~] Create separate replacement textures per pipeline-plus-descriptor binding.
     Evidence: canonical cross-API BindingInstanceKey now distinguishes pipeline and
     descriptor-slot placement; GPU replacement allocation/binding remains.

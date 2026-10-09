@@ -263,6 +263,40 @@ static void test_elliptical_uv_splat_uses_gradients_and_confidence() {
             "higher-confidence UV observation did not dominate accumulated color");
 }
 
+static void test_mips_do_not_expand_texture_coverage() {
+    MaterialTextureAtlas atlas(12, 4, 4);
+    TextureBakeSettings settings;
+    settings.wrap_u = false;
+    settings.wrap_v = false;
+    for (std::uint32_t y = 0; y < 2; ++y) {
+        for (std::uint32_t x = 0; x < 2; ++x) {
+            SurfaceCorrespondence sample {0, 0, 12,
+                static_cast<float>(x) / 3.0f,
+                static_cast<float>(y) / 3.0f, 1.0f};
+            const auto kind = x == 1 && y == 1
+                ? TextureSampleKind::generated_inpaint
+                : TextureSampleKind::direct_observation;
+            require(atlas.observe({0.8f, 0.2f, 0.1f, 0.5f}, sample, settings, kind),
+                    "mip fixture did not paint its source footprint");
+        }
+    }
+    const auto mips = atlas.generate_mips();
+    require(mips.size() == 3 && mips[1].color.width() == 2 &&
+            mips[2].color.width() == 1,
+            "atlas generated an invalid mip chain");
+    require(mips[1].coverage.at(0, 0) == MaterialTextureAtlas::kInpainted &&
+            mips[1].coverage.at(1, 0) == MaterialTextureAtlas::kUnseen &&
+            mips[1].coverage.at(0, 1) == MaterialTextureAtlas::kUnseen &&
+            mips[1].coverage.at(1, 1) == MaterialTextureAtlas::kUnseen,
+            "first mip expanded or lost conservative provenance coverage");
+    const auto coarse = mips[2].color.at(0, 0);
+    require(mips[2].coverage.at(0, 0) == MaterialTextureAtlas::kUnseen &&
+            coarse.r == MaterialTextureAtlas::kUnpaintedColor.r &&
+            coarse.g == MaterialTextureAtlas::kUnpaintedColor.g &&
+            coarse.b == MaterialTextureAtlas::kUnpaintedColor.b,
+            "coarse mip leaked style across an unseen texture footprint");
+}
+
 static void test_material_baker_handles_sparse_multiple_materials() {
     Image<Color> restyled(4, 1);
     restyled.at(0, 0) = {1.0f, 0.0f, 0.0f, 1.0f};
@@ -631,6 +665,7 @@ int main() {
         test_texture_baker_splats_inpaints_and_reconstructs();
         test_texture_baker_locks_observed_texels_and_rejects_bad_depth();
         test_elliptical_uv_splat_uses_gradients_and_confidence();
+        test_mips_do_not_expand_texture_coverage();
         test_material_baker_handles_sparse_multiple_materials();
         test_uncovered_atlas_never_reconstructs_debug_sentinel();
         test_partial_atlas_sampling_ignores_unseen_neighbors();

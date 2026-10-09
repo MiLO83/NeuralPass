@@ -50,6 +50,11 @@ enum class TextureSampleKind : std::uint8_t {
     direct_observation,
 };
 
+struct MaterialTextureMip {
+    Image<Color> color;
+    Image<std::uint8_t> coverage;
+};
+
 class MaterialTextureAtlas {
 public:
     static constexpr Color kUnpaintedColor {1.0f, 0.0f, 1.0f, 1.0f};
@@ -80,6 +85,10 @@ public:
     [[nodiscard]] Color sample(float u, float v, bool wrap_u = true, bool wrap_v = true) const;
     [[nodiscard]] bool has_coverage(float u, float v, bool wrap_u = true,
                                     bool wrap_v = true) const;
+    // Level zero is a copy of the atlas. A coarser texel remains unseen unless
+    // every source texel in its footprint is covered, preventing mip filtering
+    // from growing style into never-observed texture regions.
+    [[nodiscard]] std::vector<MaterialTextureMip> generate_mips() const;
 
     // Versioned binary snapshots include color, observation weights, coverage,
     // and a payload checksum. The caller chooses the final path.
