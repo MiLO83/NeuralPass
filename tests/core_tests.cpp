@@ -2,6 +2,7 @@
 #include "neuralpass/binding_identity.hpp"
 #include "neuralpass/tile_scheduler.hpp"
 #include "neuralpass/inference.hpp"
+#include "neuralpass/scene_cache.hpp"
 #include "neuralpass/surface_capture.hpp"
 #include "neuralpass/texture_baker.hpp"
 
@@ -320,7 +321,10 @@ static void test_scene_transition_preserves_camera_cuts_and_confirms_new_scenes(
     }};
     require(tracker.observe(false, room) == SceneTransition::stable,
             "first scene was not initialized as stable");
+    tracker.set_scene_identity(0x1234);
     const auto room_key = tracker.scene_key();
+    require(room_key.identity == 0x1234,
+            "persistent scene identity was not attached to the generation token");
     require(tracker.observe(true, room) == SceneTransition::camera_cut,
             "visual cut with shared materials was not classified as a camera cut");
     require(tracker.scene_key() == room_key,
@@ -436,6 +440,46 @@ static void test_atlas_cache_round_trip_and_rejects_corruption() {
     std::filesystem::remove(directory, error);
 }
 
+static void test_scene_cache_catalog_matches_returning_views_and_isolates_scenes() {
+    const auto unique = std::to_string(std::chrono::steady_clock::now()
+        .time_since_epoch().count());
+    const auto directory = std::filesystem::temp_directory_path() /
+        ("neuralpass-scene-test-" + unique);
+    SceneCacheCatalog catalog(directory, 0.5f);
+    const std::array<std::uint64_t, 3> room {101, 102, 103};
+    const auto created = catalog.resolve(room);
+    require(created.valid() && !created.matched_existing && catalog.record(created.identity, room),
+            "scene cache did not create its first persistent namespace");
+
+    const std::array<std::uint64_t, 2> another_room_view {102, 104};
+    const auto returned = catalog.resolve(another_room_view);
+    require(returned.matched_existing && returned.identity == created.identity,
+            "returning scene view did not match its persistent namespace");
+    require(catalog.record(returned.identity, another_room_view),
+            "scene cache did not accumulate a returning view");
+    const std::array<std::uint64_t, 1> accumulated_view {104};
+    require(catalog.resolve(accumulated_view).identity == created.identity,
+            "accumulated scene binding was not available for later matching");
+
+    const std::array<std::uint64_t, 2> foreign {9001, 9002};
+    const auto isolated = catalog.resolve(foreign);
+    require(isolated.valid() && !isolated.matched_existing && isolated.identity != created.identity,
+            "foreign scene reused an unrelated cache namespace");
+    require(catalog.record(isolated.identity, foreign),
+            "foreign scene namespace was not recorded");
+
+    {
+        std::ofstream corrupt(isolated.directory / "materials-corrupt.npscene", std::ios::binary);
+        corrupt << "NPSCNO1";
+    }
+    require(catalog.resolve(foreign).identity == isolated.identity,
+            "corrupt scene manifest hid the newest valid generation");
+    require(!catalog.resolve({}).valid(),
+            "empty/session-only evidence created a persistent scene namespace");
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+}
+
 int main() {
     try {
         test_reprojection_accepts_stable_pixels();
@@ -456,6 +500,7 @@ int main() {
         test_scene_transition_preserves_camera_cuts_and_confirms_new_scenes();
         test_same_scene_camera_cut_preserves_atlas_and_reveals_new_uvs();
         test_atlas_cache_round_trip_and_rejects_corruption();
+        test_scene_cache_catalog_matches_returning_views_and_isolates_scenes();
         std::cout << "NeuralPass core tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {

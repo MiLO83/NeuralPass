@@ -6,6 +6,7 @@
 #include "d3d11_surface_capture.hpp"
 #include "neuralpass/binding_identity.hpp"
 #include "neuralpass/inference.hpp"
+#include "neuralpass/scene_cache.hpp"
 #include "neuralpass/texture_baker.hpp"
 #include "neuralpass/temporal.hpp"
 #include "neuralpass/tile_scheduler.hpp"
@@ -949,12 +950,39 @@ void process_frames(RuntimeState *state, std::stop_token token) {
     HistoryFrame history;
     neuralpass::MaterialTextureBaker material_baker;
     neuralpass::SceneTransitionTracker scene_transitions;
-    const auto atlas_directory = g_addon_directory / "NeuralPassCache" / "atlases";
-    const auto loaded_atlases = material_baker.load_cache(atlas_directory);
-    if (loaded_atlases.loaded != 0)
-        reshade::log::message(reshade::log::level::info,
-            ("NeuralPass loaded " + std::to_string(loaded_atlases.loaded) +
-             " persistent material atlases.").c_str());
+    neuralpass::SceneCacheCatalog scene_catalog(
+        g_addon_directory / "NeuralPassCache" / "scenes");
+    std::optional<neuralpass::SceneCacheSelection> active_scene;
+    std::unordered_set<std::uint64_t> active_scene_materials;
+    auto stable_visible = [](std::span<const neuralpass::SurfaceCorrespondence> samples) {
+        std::vector<std::uint64_t> result;
+        std::lock_guard lock(g_baker_probe_mutex);
+        for (const auto &sample : samples)
+            if (g_restart_stable_materials.contains(sample.material_id))
+                result.push_back(sample.material_id);
+        std::sort(result.begin(), result.end());
+        result.erase(std::unique(result.begin(), result.end()), result.end());
+        return result;
+    };
+    auto save_active_scene = [&] {
+        if (!active_scene || !active_scene->valid()) return;
+        std::vector<std::uint64_t> stable(active_scene_materials.begin(),
+                                          active_scene_materials.end());
+        (void)material_baker.save_cache(active_scene->directory / "atlases", stable);
+        (void)scene_catalog.record(active_scene->identity, stable);
+    };
+    auto activate_scene = [&](std::span<const std::uint64_t> stable) {
+        if (stable.empty()) return;
+        active_scene = scene_catalog.resolve(stable);
+        active_scene_materials.insert(stable.begin(), stable.end());
+        scene_transitions.set_scene_identity(active_scene->identity);
+        const auto loaded = material_baker.load_cache(active_scene->directory / "atlases");
+        if (loaded.loaded != 0)
+            reshade::log::message(reshade::log::level::info,
+                ("NeuralPass loaded " + std::to_string(loaded.loaded) +
+                 " atlases for persistent scene " +
+                 std::to_string(active_scene->identity) + ".").c_str());
+    };
     std::unique_ptr<neuralpass::InferenceBackend> backend;
     char *preset_value = nullptr;
     std::size_t preset_length = 0;
@@ -1023,19 +1051,23 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             neuralpass::is_camera_cut(current, cut_reference);
         previous_scene = current;
         const auto transition = scene_transitions.observe(visual_cut, correspondence);
+        const auto visible_stable = stable_visible(correspondence);
         if (transition == neuralpass::SceneTransition::scene_change) {
-            std::vector<std::uint64_t> stable;
-            {
-                std::lock_guard lock(g_baker_probe_mutex);
-                stable.assign(g_restart_stable_materials.begin(), g_restart_stable_materials.end());
-            }
-            (void)material_baker.save_cache(atlas_directory, stable);
+            save_active_scene();
             material_baker.reset_scene();
+            active_scene.reset();
+            active_scene_materials.clear();
+            activate_scene(visible_stable);
             bridge_bake.reset();
         } else if (transition == neuralpass::SceneTransition::camera_cut ||
                    transition == neuralpass::SceneTransition::pending_scene_change) {
             material_baker.invalidate_in_flight();
             bridge_bake.reset();
+        }
+        if (transition != neuralpass::SceneTransition::scene_change &&
+            transition != neuralpass::SceneTransition::pending_scene_change) {
+            if (!active_scene) activate_scene(visible_stable);
+            else active_scene_materials.insert(visible_stable.begin(), visible_stable.end());
         }
         // A foreign cut is deliberately quarantined: screen-space output may
         // continue, but no UV observation is allowed to read or mutate either
@@ -1207,15 +1239,7 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         }
     }
 
-    std::vector<std::uint64_t> stable;
-    {
-        std::lock_guard lock(g_baker_probe_mutex);
-        stable.assign(g_restart_stable_materials.begin(), g_restart_stable_materials.end());
-    }
-    const auto saved = material_baker.save_cache(atlas_directory, stable);
-    if (saved.rejected != 0)
-        reshade::log::message(reshade::log::level::warning,
-            "NeuralPass could not save one or more material atlas snapshots.");
+    save_active_scene();
 }
 
 void find_effect_variables(reshade::api::effect_runtime *runtime) {

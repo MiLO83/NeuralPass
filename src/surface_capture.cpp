@@ -109,6 +109,7 @@ void SceneTransitionTracker::reset() {
     scene_materials_.clear();
     candidate_materials_.clear();
     foreign_frames_ = 0;
+    scene_key_.identity = 0;
     advance(scene_key_);
 }
 

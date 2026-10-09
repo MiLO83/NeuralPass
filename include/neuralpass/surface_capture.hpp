@@ -56,6 +56,9 @@ enum class SceneTransition {
 };
 
 struct SceneKey {
+    // Persistent catalog identity is zero until enough restart-stable evidence
+    // exists. Generation remains process-local and rejects stale async work.
+    std::uint64_t identity = 0;
     std::uint64_t generation = 1;
 
     [[nodiscard]] bool valid() const noexcept { return generation != 0; }
@@ -80,6 +83,7 @@ public:
         bool visual_cut,
         std::span<const SurfaceCorrespondence> correspondence);
     [[nodiscard]] SceneKey scene_key() const noexcept { return scene_key_; }
+    void set_scene_identity(std::uint64_t identity) noexcept { scene_key_.identity = identity; }
     void reset();
 
 private:

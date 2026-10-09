@@ -20,9 +20,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 
 1. SCENE AND VISIBILITY SYSTEM
 ------------------------------
-[~] Add stable SceneKey and generation tokens.
-    Evidence: runtime SceneKey generation advances only on confirmed scene changes/reset;
-    core transition tests and Windows add-on build pass. Persistent scene identity remains.
+[x] Add stable SceneKey and generation tokens.
+    Evidence: restart-stable scene catalog identity plus runtime generation tests;
+    returning-view/corrupt-manifest tests and Windows add-on build pass.
 [x] Quarantine ambiguous cuts until same-scene/new-scene classification resolves.
     Evidence: pending-scene transition/recovery tests and Windows add-on build.
 [x] Preserve atlases across same-scene camera cuts and bake newly visible UVs.
@@ -84,7 +84,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 
 5. PERSISTENCE AND MIGRATION
 ----------------------------
-[ ] Namespace caches by game build, scene, style, model, binding, source, and UV topology.
+[~] Namespace caches by game build, scene, style, model, binding, source, and UV topology.
+    Evidence: persistent scene and pipeline-plus-descriptor binding namespaces implemented;
+    game/style/model/source/UV-topology dimensions remain.
 [ ] Double-buffer style generations during prompt/model changes.
 [ ] Migrate compatible identities and coverage after game updates.
 [ ] Quarantine ambiguous migrations for manual reassignment.

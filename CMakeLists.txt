@@ -10,6 +10,7 @@ add_library(neuralpass_core STATIC
     src/atlas_cache.cpp
     src/binding_identity.cpp
     src/inference_preview.cpp
+    src/scene_cache.cpp
     src/surface_capture.cpp
     src/temporal.cpp
     src/texture_baker.cpp
