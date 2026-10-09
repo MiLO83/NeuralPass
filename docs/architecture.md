@@ -174,6 +174,38 @@ restoration, and render-target restoration. Production-created companion PSOs,
 DXIL-specific reflection beyond the input-declaration fallback, device-loss stress,
 and real-game validation remain required before D3D12 can be promoted.
 
+### Vulkan replay adapter
+
+The Vulkan scaffold retains application SPIR-V and fixed-function pipeline
+metadata at pipeline creation. Before creating a companion pipeline, it locates
+the plain 32-bit float2 vertex input at the inferred input-layout location. It
+adds a dedicated output varying at an unused location guaranteed by Vulkan's
+minimum vertex-output limit, registers that output with the selected entry point,
+and stores the real UV on every return. The embedded capture fragment module has
+one reserved input decoration that is patched to the new varying. Malformed or
+ambiguous modules, interface blocks, missing entry points, and exhausted output
+locations are rejected instead of receiving guessed UV data. Material identity
+is supplied through specialization constants, while the application's original
+vertex specialization constants are retained.
+
+The current transformer targets vertex-to-fragment pipelines. Tessellation,
+geometry, and mesh-shader pipelines stay on screen-space fallback because their
+final pre-raster stage must be instrumented instead of assuming a vertex output
+will propagate through intermediate stages.
+
+For accepted direct, indexed, and single-command indirect draws, the adapter
+executes the application draw once, binds four canonical capture targets, replays
+with equal depth testing and writes disabled, then restores the application
+pipeline and render/depth attachments. Capture targets are explicitly transitioned
+into a three-slot buffer ring on ReShade's immediate command list; generic queue
+fences expose only completed slots without a normal-path CPU wait. Native
+render-pass draws, MSAA targets, source-texture sampling, replacement descriptors,
+device-loss recovery, SwiftShader coverage, and real-driver
+game evidence remain promotion gates. The checked-in SPIR-V is generated from
+`addon/shaders/vulkan_capture.frag`; a platform-neutral test instruments a real
+compiled vertex fixture, checks failure cases and the fragment-location link, and
+the transformed module passes SPIR-V Tools validation during development.
+
 Capture uses equality depth testing with writes disabled, so replayed fragments
 must match the surface written by the original draw. Three staging textures and
 event queries provide readback without flushing or waiting. Each staging slot

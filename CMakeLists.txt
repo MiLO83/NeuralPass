@@ -31,6 +31,10 @@ if(NEURALPASS_BUILD_TESTS)
     add_executable(neuralpass_tests tests/core_tests.cpp)
     target_link_libraries(neuralpass_tests PRIVATE neuralpass_core)
     add_test(NAME neuralpass_core COMMAND neuralpass_tests)
+    add_executable(neuralpass_vulkan_spirv_tests tests/vulkan_spirv_tests.cpp)
+    target_include_directories(neuralpass_vulkan_spirv_tests PRIVATE addon)
+    target_compile_features(neuralpass_vulkan_spirv_tests PRIVATE cxx_std_20)
+    add_test(NAME neuralpass_vulkan_spirv COMMAND neuralpass_vulkan_spirv_tests)
     if(WIN32)
         add_executable(neuralpass_d3d11_capture_tests
             addon/d3d11_surface_capture.cpp
@@ -66,6 +70,7 @@ if(NEURALPASS_BUILD_ADDON)
     add_library(NeuralPassAddon SHARED
         addon/d3d11_surface_capture.cpp
         addon/d3d12_surface_capture.cpp
+        addon/vulkan_surface_capture.cpp
         addon/neuralpass_addon.cpp
         "${RESHADE_SDK_DIR}/examples/utils/descriptor_tracking.cpp")
     target_compile_features(NeuralPassAddon PRIVATE cxx_std_20)

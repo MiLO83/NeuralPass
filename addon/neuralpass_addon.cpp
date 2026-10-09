@@ -5,6 +5,7 @@
 
 #include "d3d11_surface_capture.hpp"
 #include "d3d12_surface_capture.hpp"
+#include "vulkan_surface_capture.hpp"
 #include "neuralpass/binding_identity.hpp"
 #include "neuralpass/inference.hpp"
 #include "neuralpass/scene_cache.hpp"
@@ -230,6 +231,7 @@ void on_baker_init_pipeline(reshade::api::device *device, reshade::api::pipeline
     bool has_explicit_uv = false;
     bool has_inferred_uv = false;
     neuralpass::capture::UvInput declared_uv;
+    neuralpass::capture::UvInput inferred_uv;
     std::uint64_t pipeline_fingerprint = k_fnv_offset;
     PipelineCaptureInfo capture_info;
     capture_info.layout = layout;
@@ -294,6 +296,7 @@ void on_baker_init_pipeline(reshade::api::device *device, reshade::api::pipeline
                     case reshade::api::format::r16g16_snorm:
                     case reshade::api::format::r32g32_float:
                         has_inferred_uv = true;
+                        inferred_uv.location = elements[element].location;
                         capture_info.uv_binding = elements[element].buffer_binding;
                         capture_info.uv_offset = elements[element].offset;
                         capture_info.uv_stride = elements[element].stride;
@@ -317,6 +320,9 @@ void on_baker_init_pipeline(reshade::api::device *device, reshade::api::pipeline
         if (device->get_api() == reshade::api::device_api::d3d12 &&
             declared_uv.valid() && !g_vertex_uv_outputs.contains(pipeline.handle))
             g_vertex_uv_outputs[pipeline.handle] = declared_uv;
+        if (device->get_api() == reshade::api::device_api::vulkan &&
+            inferred_uv.valid() && !g_vertex_uv_outputs.contains(pipeline.handle))
+            g_vertex_uv_outputs[pipeline.handle] = inferred_uv;
     }
     // D3D9/10/11 create and bind input layouts, VS and PS as independent
     // pipeline objects. D3D12 and Vulkan generally include them in one object.
@@ -337,6 +343,13 @@ void on_baker_init_pipeline(reshade::api::device *device, reshade::api::pipeline
             if (auto *d3d12 = dynamic_cast<neuralpass::d3d12_capture::SurfaceCapture *>(
                     capture->second.get()))
                 d3d12->register_pipeline(layout, subobject_count, subobjects, pipeline);
+    } else if (device->get_api() == reshade::api::device_api::vulkan) {
+        std::lock_guard lock(g_baker_probe_mutex);
+        const auto capture = g_surface_captures.find(device);
+        if (capture != g_surface_captures.end())
+            if (auto *vulkan = dynamic_cast<neuralpass::vulkan_capture::SurfaceCapture *>(
+                    capture->second.get()))
+                vulkan->register_pipeline(layout, subobject_count, subobjects, pipeline);
     }
 }
 
@@ -446,15 +459,17 @@ void on_baker_destroy_resource(reshade::api::device *, reshade::api::resource re
 }
 
 void on_baker_destroy_pipeline(reshade::api::device *device, reshade::api::pipeline pipeline) {
-    neuralpass::d3d12_capture::SurfaceCapture *d3d12 = nullptr;
+    neuralpass::capture::SurfaceCaptureBackend *backend = nullptr;
     {
         std::lock_guard lock(g_baker_probe_mutex);
         if (const auto capture = g_surface_captures.find(device);
             capture != g_surface_captures.end())
-            d3d12 = dynamic_cast<neuralpass::d3d12_capture::SurfaceCapture *>(
-                capture->second.get());
+            backend = capture->second.get();
     }
-    if (d3d12 != nullptr) d3d12->unregister_pipeline(pipeline);
+    if (auto *d3d12 = dynamic_cast<neuralpass::d3d12_capture::SurfaceCapture *>(backend))
+        d3d12->unregister_pipeline(pipeline);
+    if (auto *vulkan = dynamic_cast<neuralpass::vulkan_capture::SurfaceCapture *>(backend))
+        vulkan->unregister_pipeline(pipeline);
     std::lock_guard lock(g_baker_probe_mutex);
     g_pipeline_fingerprints.erase(pipeline.handle);
     g_vertex_uv_outputs.erase(pipeline.handle);
@@ -1005,6 +1020,39 @@ void configure_d3d12_draw_state(reshade::api::command_list *command_list,
     }
 }
 
+void configure_vulkan_draw_state(reshade::api::command_list *command_list,
+                                 const BakerCommandState &state,
+                                 neuralpass::capture::SurfaceCaptureBackend *capture,
+                                 neuralpass::capture::DrawCommand &draw) {
+    if (dynamic_cast<neuralpass::vulkan_capture::SurfaceCapture *>(capture) == nullptr)
+        return;
+    draw.pipeline = state.pipeline.handle;
+    draw.pipeline_layout = state.layout.handle;
+    draw.render_target_count = state.render_target_count;
+    draw.depth_stencil_view = state.depth_stencil.handle;
+    draw.inside_render_pass = state.inside_render_pass;
+    draw.api_command_list = command_list;
+    for (std::uint32_t index = 0; index < state.render_target_count; ++index)
+        draw.render_target_views[index] = state.render_targets[index].handle;
+    if (!state.inside_render_pass && state.render_target_count != 0 &&
+        state.render_targets[0] != 0) {
+        const auto resource = command_list->get_device()->get_resource_from_view(
+            state.render_targets[0]);
+        if (resource != 0) {
+            const auto desc = command_list->get_device()->get_resource_desc(resource);
+            draw.target_compatible = desc.type == reshade::api::resource_type::texture_2d &&
+                desc.texture.width == capture->width() &&
+                desc.texture.height == capture->height() && desc.texture.samples == 1;
+        }
+    }
+}
+
+void *capture_command_handle(reshade::api::command_list *command_list) {
+    return command_list->get_device()->get_api() == reshade::api::device_api::vulkan
+        ? static_cast<void *>(command_list)
+        : reinterpret_cast<void *>(command_list->get_native());
+}
+
 bool on_baker_draw(reshade::api::command_list *command_list, std::uint32_t vertex_count,
                    std::uint32_t instance_count, std::uint32_t first_vertex,
                    std::uint32_t first_instance) {
@@ -1012,7 +1060,8 @@ bool on_baker_draw(reshade::api::command_list *command_list, std::uint32_t verte
     const auto api = command_list->get_device()->get_api();
     if (material.value == 0 ||
         (api != reshade::api::device_api::d3d11 &&
-         api != reshade::api::device_api::d3d12)) return false;
+         api != reshade::api::device_api::d3d12 &&
+         api != reshade::api::device_api::vulkan)) return false;
     const auto *state = command_list->get_private_data<BakerCommandState>();
     neuralpass::capture::UvInput uv;
     neuralpass::capture::SurfaceCaptureBackend *capture = nullptr;
@@ -1034,8 +1083,9 @@ bool on_baker_draw(reshade::api::command_list *command_list, std::uint32_t verte
         .first_instance = first_instance,
     };
     configure_d3d12_draw_state(command_list, *state, capture, draw, source_override);
+    configure_vulkan_draw_state(command_list, *state, capture, draw);
     return capture != nullptr && uv.valid() && capture->replay(
-        reinterpret_cast<void *>(command_list->get_native()), uv, material.value,
+        capture_command_handle(command_list), uv, material.value,
         draw, source_override);
 }
 
@@ -1047,7 +1097,8 @@ bool on_baker_draw_indexed(reshade::api::command_list *command_list,
     const auto api = command_list->get_device()->get_api();
     if (material.value == 0 ||
         (api != reshade::api::device_api::d3d11 &&
-         api != reshade::api::device_api::d3d12)) return false;
+         api != reshade::api::device_api::d3d12 &&
+         api != reshade::api::device_api::vulkan)) return false;
     const auto *state = command_list->get_private_data<BakerCommandState>();
     neuralpass::capture::UvInput uv;
     neuralpass::capture::SurfaceCaptureBackend *capture = nullptr;
@@ -1070,15 +1121,16 @@ bool on_baker_draw_indexed(reshade::api::command_list *command_list,
         .first_instance = first_instance,
     };
     configure_d3d12_draw_state(command_list, *state, capture, draw, source_override);
+    configure_vulkan_draw_state(command_list, *state, capture, draw);
     return capture != nullptr && uv.valid() && capture->replay(
-        reinterpret_cast<void *>(command_list->get_native()), uv, material.value,
+        capture_command_handle(command_list), uv, material.value,
         draw, source_override);
 }
 
 bool on_baker_draw_indirect(reshade::api::command_list *command_list,
                             reshade::api::indirect_command type,
                             reshade::api::resource buffer, std::uint64_t offset,
-                            std::uint32_t draw_count, std::uint32_t) {
+                            std::uint32_t draw_count, std::uint32_t stride) {
     if ((type != reshade::api::indirect_command::draw &&
          type != reshade::api::indirect_command::draw_indexed) ||
         buffer.handle == 0 || draw_count != 1 || offset > UINT_MAX)
@@ -1087,7 +1139,8 @@ bool on_baker_draw_indirect(reshade::api::command_list *command_list,
     const auto api = command_list->get_device()->get_api();
     if (material.value == 0 ||
         (api != reshade::api::device_api::d3d11 &&
-         api != reshade::api::device_api::d3d12)) return false;
+         api != reshade::api::device_api::d3d12 &&
+         api != reshade::api::device_api::vulkan)) return false;
     const auto *state = command_list->get_private_data<BakerCommandState>();
     neuralpass::capture::UvInput uv;
     neuralpass::capture::SurfaceCaptureBackend *capture = nullptr;
@@ -1109,9 +1162,11 @@ bool on_baker_draw_indirect(reshade::api::command_list *command_list,
         .argument_buffer = reinterpret_cast<void *>(buffer.handle),
         .argument_offset = offset,
         .draw_count = draw_count,
+        .argument_stride = stride,
     };
     configure_d3d12_draw_state(command_list, *state, capture, draw, source_override);
-    return capture->replay(reinterpret_cast<void *>(command_list->get_native()), uv,
+    configure_vulkan_draw_state(command_list, *state, capture, draw);
+    return capture->replay(capture_command_handle(command_list), uv,
                            material.value, draw, source_override);
 }
 
@@ -1852,9 +1907,18 @@ bool ensure_readback(reshade::api::effect_runtime *runtime, RuntimeState &state,
 }
 
 void on_baker_init_device(reshade::api::device *device) {
-    if (device->get_api() != reshade::api::device_api::d3d12) return;
-    auto capture = std::make_unique<neuralpass::d3d12_capture::SurfaceCapture>();
-    capture->attach(device, nullptr);
+    std::unique_ptr<neuralpass::capture::SurfaceCaptureBackend> capture;
+    if (device->get_api() == reshade::api::device_api::d3d12) {
+        auto backend = std::make_unique<neuralpass::d3d12_capture::SurfaceCapture>();
+        backend->attach(device, nullptr);
+        capture = std::move(backend);
+    } else if (device->get_api() == reshade::api::device_api::vulkan) {
+        auto backend = std::make_unique<neuralpass::vulkan_capture::SurfaceCapture>();
+        backend->attach(device, nullptr);
+        capture = std::move(backend);
+    } else {
+        return;
+    }
     std::lock_guard lock(g_baker_probe_mutex);
     g_surface_captures.try_emplace(device, std::move(capture));
 }
@@ -1925,6 +1989,23 @@ void on_init(reshade::api::effect_runtime *runtime) {
                 reshade::log::message(reshade::log::level::warning,
                     "NeuralPass could not initialize the D3D12 mesh-UV capture surface.");
         }
+    } else if (runtime->get_device()->get_api() == reshade::api::device_api::vulkan) {
+        const auto back_buffer = runtime->get_back_buffer(0);
+        const auto desc = runtime->get_device()->get_resource_desc(back_buffer);
+        std::lock_guard lock(g_baker_probe_mutex);
+        auto found = g_surface_captures.find(runtime->get_device());
+        if (found == g_surface_captures.end()) {
+            auto capture = std::make_unique<neuralpass::vulkan_capture::SurfaceCapture>();
+            found = g_surface_captures.emplace(runtime->get_device(), std::move(capture)).first;
+        }
+        auto *capture = dynamic_cast<neuralpass::vulkan_capture::SurfaceCapture *>(
+            found->second.get());
+        if (capture != nullptr) {
+            capture->attach(runtime->get_device(), runtime->get_command_queue());
+            if (!capture->initialize(nullptr, desc.texture.width, desc.texture.height))
+                reshade::log::message(reshade::log::level::warning,
+                    "NeuralPass could not initialize the Vulkan mesh-UV capture surface.");
+        }
     }
     find_effect_variables(runtime);
 }
@@ -1990,7 +2071,8 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
     const auto source = device->get_resource_from_view(rtv);
     const auto source_desc = device->get_resource_desc(source);
     if ((device->get_api() == reshade::api::device_api::d3d11 ||
-         device->get_api() == reshade::api::device_api::d3d12) && command_list != nullptr) {
+         device->get_api() == reshade::api::device_api::d3d12 ||
+         device->get_api() == reshade::api::device_api::vulkan) && command_list != nullptr) {
         neuralpass::capture::SurfaceCaptureBackend *capture = nullptr;
         {
             std::scoped_lock lock(g_baker_probe_mutex, state->mutex);
@@ -2001,7 +2083,9 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
                     capture->height() != source_desc.texture.height) {
                     state->surface_ready.clear();
                     state->pending_surface.reset();
-                    if (!capture->initialize(reinterpret_cast<void *>(device->get_native()),
+                    void *native_device = device->get_api() == reshade::api::device_api::vulkan
+                        ? nullptr : reinterpret_cast<void *>(device->get_native());
+                    if (!capture->initialize(native_device,
                             source_desc.texture.width, source_desc.texture.height)) {
                         reshade::log::message(reshade::log::level::warning,
                             "NeuralPass could not resize the mesh-UV capture surface.");
@@ -2019,7 +2103,9 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
         }
         if (capture != nullptr) {
             auto surface = capture->finish_frame(
-                reinterpret_cast<void *>(command_list->get_native()));
+                device->get_api() == reshade::api::device_api::vulkan
+                    ? static_cast<void *>(command_list)
+                    : reinterpret_cast<void *>(command_list->get_native()));
             if (surface) {
                 std::uint64_t supported = 0;
                 for (const auto &pixel : surface->pixels().pixels())
@@ -2278,7 +2364,9 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
             runtime->get_device()->get_api() == reshade::api::device_api::d3d11
                 ? "D3D11 UV-bearing draws are replayed into the asynchronous surface capture."
             : runtime->get_device()->get_api() == reshade::api::device_api::d3d12
-                ? "D3D12 UV-bearing draws use experimental PSO replay; native render passes and replacement remain fallback-only."
+                ? "D3D12 UV-bearing draws use experimental PSO replay and bounded-table RGBA replacement; native render passes remain fallback-only."
+            : runtime->get_device()->get_api() == reshade::api::device_api::vulkan
+                ? "Vulkan UV-bearing draws use experimental vertex-SPIR-V instrumentation and replay; replacement and native render passes remain fallback-only."
                 : "UV-bearing draws detected; this API still needs its replay adapter.");
     ImGui::SeparatorText("Scene identity");
     const auto transition = static_cast<neuralpass::SceneTransition>(

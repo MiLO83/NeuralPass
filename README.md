@@ -34,7 +34,10 @@ motion, mesh UV gradients, binding identity, and visibility classes. The
 experimental D3D11 and D3D12 adapters supply exact rasterized mesh UVs and
 gradients; D3D12 now also samples a descriptor-tracked source texture when a
 compatible texture/sampler pair is bound. Its bounded-table RGBA8/BGRA8
-replacement path is experimental and still needs real-game validation.
+replacement path is experimental and still needs real-game validation. A new
+Vulkan scaffold instruments a compatible vertex SPIR-V module to carry the real
+UV input into the same surface contract and uses a generic three-slot fence/readback
+ring, but still needs driver/game validation, source sampling, and replacement textures.
 
 ## Build
 
@@ -227,20 +230,23 @@ first-observation evidence while the reveal-only atlas planner still schedules
 its uncovered UVs. Missing capture frames break the comparison chain rather
 than reprojecting across an unknown gap.
 
-D3D9/10 and Vulkan still require equivalent adapters. D3D12 has experimental
-PSO replay, asynchronous capture, and descriptor-isolated RGBA8/BGRA8 replacement,
-but render-pass replay, device-loss stress, and real-game evidence remain. Unsupported APIs, shader
-signatures, deferred contexts, render-target sizes, and MSAA draws retain the
-screen-space path instead of receiving guessed UV data. The canonical capture
-and multi-material baker remain API-neutral so every adapter emits the same
-validated surface-frame contract.
+D3D9/10 still require equivalent adapters. D3D12 has experimental PSO replay,
+asynchronous capture, and descriptor-isolated RGBA8/BGRA8 replacement. Vulkan
+has SPIR-V vertex instrumentation, pipeline replay, and asynchronous readback, but
+accepts a draw only when it can safely identify and instrument a plain float2 UV
+input. Both explicit APIs still need real-game evidence; Vulkan also needs
+source sampling and replacement. Unsupported APIs, shader signatures, native
+render passes, render-target sizes, and MSAA draws retain the screen-space path
+instead of receiving guessed UV data. The canonical capture and multi-material
+baker remain API-neutral so every adapter emits the same validated surface-frame
+contract.
 
 | Graphics API | Geometry capture status |
 | --- | --- |
 | D3D11 | Experimental draw replay and RGBA8/BGRA8 replacement; automated WARP coverage |
 | D3D9 / D3D10 | Adapter required |
 | D3D12 | Experimental direct/indirect PSO replay, readback, and bounded-table RGBA8/BGRA8 replacement; game validation pending |
-| Vulkan | Adapter required |
+| Vulkan | Experimental SPIR-V UV instrumentation, replay, and asynchronous readback; no replacement or hardware/game evidence yet |
 
 Atlas snapshots use a versioned, checksummed `.npatlas` format. Writes create a
 new generation and rename it only after the complete payload is flushed, so an
@@ -257,8 +263,8 @@ backend without starting the game.
 
 ## Important limitations
 
-- Geometry-aware persistent baking is currently experimental on D3D11 only;
-  this is not yet a cross-API production release.
+- Geometry-aware persistent baking is validated only on D3D11 WARP; D3D12 and
+  Vulkan adapters remain experimental and this is not a cross-API production release.
 - The D3D11 replay shader rejects fully transparent texels from its selected
   source texture, but cannot reproduce application-specific `discard`, custom
   alpha thresholds, or opacity sourced from another texture yet.
