@@ -30,6 +30,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -140,6 +141,18 @@ struct BakerVertexBinding {
     std::uint32_t stride = 0;
 };
 
+struct BakerPixelResource {
+    reshade::api::resource_view view = {};
+    std::uint32_t dx_register_index = 0;
+    std::uint32_t dx_register_space = 0;
+};
+
+struct BakerPixelSampler {
+    reshade::api::sampler sampler = {};
+    std::uint32_t dx_register_index = 0;
+    std::uint32_t dx_register_space = 0;
+};
+
 struct __declspec(uuid("69062FC3-7159-466E-A9B2-4E505542414B")) BakerCommandState {
     // 'pipeline' is the input-layout/combined pipeline that owns the UV
     // declaration. Legacy D3D APIs bind shaders as separate pipeline objects.
@@ -155,7 +168,8 @@ struct __declspec(uuid("69062FC3-7159-466E-A9B2-4E505542414B")) BakerCommandStat
     std::uint32_t render_target_count = 0;
     reshade::api::resource_view depth_stencil = {};
     bool inside_render_pass = false;
-    std::unordered_map<std::uint64_t, std::uint64_t> pixel_resources;
+    std::unordered_map<std::uint64_t, BakerPixelResource> pixel_resources;
+    std::unordered_map<std::uint64_t, BakerPixelSampler> pixel_samplers;
 };
 constexpr std::array<const char *, 5> k_presets {
     "candy", "mosaic", "rain-princess", "udnie", "photo-detail"
@@ -456,6 +470,7 @@ void on_baker_bind_pipeline(reshade::api::command_list *command_list,
         if (owns_uv_layout && state->layout != info.layout) {
             state->layout = info.layout;
             state->pixel_resources.clear();
+            state->pixel_samplers.clear();
         }
     }
 }
@@ -472,9 +487,19 @@ std::uint64_t descriptor_slot(reshade::api::pipeline_layout layout,
 }
 
 void track_pixel_descriptor(BakerCommandState &state, std::uint64_t slot,
-                            reshade::api::resource_view view) {
+                            reshade::api::resource_view view,
+                            std::uint32_t dx_register_index = 0,
+                            std::uint32_t dx_register_space = 0) {
     if (view == 0) state.pixel_resources.erase(slot);
-    else state.pixel_resources[slot] = view.handle;
+    else state.pixel_resources[slot] = {view, dx_register_index, dx_register_space};
+}
+
+void track_pixel_sampler(BakerCommandState &state, std::uint64_t slot,
+                         reshade::api::sampler sampler,
+                         std::uint32_t dx_register_index,
+                         std::uint32_t dx_register_space) {
+    if (sampler == 0) state.pixel_samplers.erase(slot);
+    else state.pixel_samplers[slot] = {sampler, dx_register_index, dx_register_space};
 }
 
 void on_baker_push_descriptors(reshade::api::command_list *command_list,
@@ -489,9 +514,22 @@ void on_baker_push_descriptors(reshade::api::command_list *command_list,
         reshade::api::resource_view view = {};
         if (update.type == reshade::api::descriptor_type::shader_resource_view)
             view = static_cast<const reshade::api::resource_view *>(update.descriptors)[index];
-        else if (update.type == reshade::api::descriptor_type::sampler_with_resource_view)
-            view = static_cast<const reshade::api::sampler_with_resource_view *>(update.descriptors)[index].view;
-        else
+        else if (update.type == reshade::api::descriptor_type::sampler_with_resource_view) {
+            const auto pair = static_cast<const reshade::api::sampler_with_resource_view *>(
+                update.descriptors)[index];
+            view = pair.view;
+            track_pixel_sampler(*state,
+                descriptor_slot(layout, param, update.binding, update.array_offset + index),
+                pair.sampler, update.binding + index, 0);
+        }
+        else if (update.type == reshade::api::descriptor_type::sampler) {
+            const auto sampler = static_cast<const reshade::api::sampler *>(
+                update.descriptors)[index];
+            track_pixel_sampler(*state,
+                descriptor_slot(layout, param, update.binding, update.array_offset + index),
+                sampler, update.binding + index, 0);
+            continue;
+        } else
             continue;
         track_pixel_descriptor(*state,
             descriptor_slot(layout, param, update.binding, update.array_offset + index), view);
@@ -515,18 +553,25 @@ void on_baker_bind_descriptor_tables(reshade::api::command_list *command_list,
             for (std::uint32_t range_index = 0; range_index < param.descriptor_table.count; ++range_index) {
                 const auto &range = param.descriptor_table.ranges[range_index];
                 if (range.count == UINT32_MAX ||
-                    (range.visibility & reshade::api::shader_stage::pixel) != reshade::api::shader_stage::pixel ||
-                    (range.type != reshade::api::descriptor_type::shader_resource_view &&
-                     range.type != reshade::api::descriptor_type::sampler_with_resource_view))
+                    (range.visibility & reshade::api::shader_stage::pixel) != reshade::api::shader_stage::pixel)
                     continue;
                 std::uint32_t base_offset = 0;
                 reshade::api::descriptor_heap heap = {};
                 command_list->get_device()->get_descriptor_heap_offset(
                     tables[table_index], range.binding, 0, &heap, &base_offset);
                 for (std::uint32_t element = 0; element < range.count; ++element) {
-                    track_pixel_descriptor(*state,
-                        descriptor_slot(layout, first + table_index, range.binding, element),
-                        tracking->get_resource_view(heap, base_offset + element));
+                    const auto slot = descriptor_slot(
+                        layout, first + table_index, range.binding, element);
+                    if (range.type == reshade::api::descriptor_type::shader_resource_view ||
+                        range.type == reshade::api::descriptor_type::sampler_with_resource_view)
+                        track_pixel_descriptor(*state, slot,
+                            tracking->get_resource_view(heap, base_offset + element),
+                            range.dx_register_index + element, range.dx_register_space);
+                    if (range.type == reshade::api::descriptor_type::sampler ||
+                        range.type == reshade::api::descriptor_type::sampler_with_resource_view)
+                        track_pixel_sampler(*state, slot,
+                            tracking->get_sampler(heap, base_offset + element),
+                            range.dx_register_index + element, range.dx_register_space);
                 }
             }
         }
@@ -540,9 +585,9 @@ neuralpass::BindingInstanceKey current_material_id(reshade::api::device *device,
                                                    const BakerCommandState &state) {
     std::vector<neuralpass::DescriptorIdentity> resources;
     resources.reserve(state.pixel_resources.size() + state.vertex_buffers.size() + 1);
-    for (const auto &[slot, handle] : state.pixel_resources) {
-        if (handle == 0) continue;
-        const reshade::api::resource_view view {handle};
+    for (const auto &[slot, binding] : state.pixel_resources) {
+        if (binding.view == 0) continue;
+        const auto view = binding.view;
         const auto resource = device->get_resource_from_view(view);
         if (resource == 0) continue;
         const auto desc = device->get_resource_desc(resource);
@@ -802,7 +847,8 @@ neuralpass::BindingInstanceKey record_baker_draw(
 void configure_d3d12_draw_state(reshade::api::command_list *command_list,
                                 const BakerCommandState &state,
                                 neuralpass::capture::SurfaceCaptureBackend *capture,
-                                neuralpass::capture::DrawCommand &draw) {
+                                neuralpass::capture::DrawCommand &draw,
+                                int source_override) {
     auto *d3d12 = dynamic_cast<neuralpass::d3d12_capture::SurfaceCapture *>(capture);
     if (d3d12 == nullptr) return;
     draw.pipeline = state.pipeline.handle;
@@ -812,6 +858,58 @@ void configure_d3d12_draw_state(reshade::api::command_list *command_list,
     draw.inside_render_pass = state.inside_render_pass;
     for (std::uint32_t index = 0; index < state.render_target_count; ++index)
         draw.render_target_views[index] = state.render_targets[index].handle;
+
+    const BakerPixelResource *best_source = nullptr;
+    std::uint64_t best_score = 0;
+    for (const auto &[slot, binding] : state.pixel_resources) {
+        (void)slot;
+        if (binding.view == 0) continue;
+        const auto resource = command_list->get_device()->get_resource_from_view(binding.view);
+        if (resource == 0) continue;
+        const auto desc = command_list->get_device()->get_resource_desc(resource);
+        const auto view_desc = command_list->get_device()->get_resource_view_desc(binding.view);
+        if (desc.type != reshade::api::resource_type::texture_2d ||
+            view_desc.type != reshade::api::resource_view_type::texture_2d ||
+            desc.texture.samples != 1 || desc.texture.width < 4 || desc.texture.height < 4)
+            continue;
+        const auto transient_usage = reshade::api::resource_usage::render_target |
+            reshade::api::resource_usage::depth_stencil |
+            reshade::api::resource_usage::unordered_access;
+        if ((desc.usage & transient_usage) != 0) continue;
+        const bool selected = source_override >= 0 &&
+            binding.dx_register_index == static_cast<std::uint32_t>(source_override);
+        const auto score = static_cast<std::uint64_t>(desc.texture.width) *
+            desc.texture.height + (static_cast<std::uint64_t>(desc.texture.levels) << 24);
+        if (selected || (source_override < 0 && score > best_score)) {
+            best_source = &binding;
+            best_score = score;
+            if (selected) break;
+        }
+    }
+    if (best_source != nullptr) {
+        const BakerPixelSampler *best_sampler = nullptr;
+        for (const auto &[slot, sampler] : state.pixel_samplers) {
+            (void)slot;
+            if (sampler.sampler == 0) continue;
+            if (best_sampler == nullptr ||
+                std::tie(sampler.dx_register_space, sampler.dx_register_index) <
+                    std::tie(best_sampler->dx_register_space, best_sampler->dx_register_index))
+                best_sampler = &sampler;
+            if (sampler.dx_register_index == best_source->dx_register_index &&
+                sampler.dx_register_space == best_source->dx_register_space) {
+                best_sampler = &sampler;
+                break;
+            }
+        }
+        if (best_sampler != nullptr) {
+            draw.source_view = best_source->view.handle;
+            draw.source_register = best_source->dx_register_index;
+            draw.source_space = best_source->dx_register_space;
+            draw.sampler_register = best_sampler->dx_register_index;
+            draw.sampler_space = best_sampler->dx_register_space;
+            draw.source_sampleable = true;
+        }
+    }
     if (!state.inside_render_pass && state.render_target_count != 0 &&
         state.render_targets[0] != 0) {
         const auto resource = command_list->get_device()->get_resource_from_view(
@@ -853,7 +951,7 @@ bool on_baker_draw(reshade::api::command_list *command_list, std::uint32_t verte
         .first_vertex_or_index = first_vertex,
         .first_instance = first_instance,
     };
-    configure_d3d12_draw_state(command_list, *state, capture, draw);
+    configure_d3d12_draw_state(command_list, *state, capture, draw, source_override);
     return capture != nullptr && uv.valid() && capture->replay(
         reinterpret_cast<void *>(command_list->get_native()), uv, material.value,
         draw, source_override);
@@ -889,7 +987,7 @@ bool on_baker_draw_indexed(reshade::api::command_list *command_list,
         .vertex_offset = vertex_offset,
         .first_instance = first_instance,
     };
-    configure_d3d12_draw_state(command_list, *state, capture, draw);
+    configure_d3d12_draw_state(command_list, *state, capture, draw, source_override);
     return capture != nullptr && uv.valid() && capture->replay(
         reinterpret_cast<void *>(command_list->get_native()), uv, material.value,
         draw, source_override);
@@ -930,7 +1028,7 @@ bool on_baker_draw_indirect(reshade::api::command_list *command_list,
         .argument_offset = offset,
         .draw_count = draw_count,
     };
-    configure_d3d12_draw_state(command_list, *state, capture, draw);
+    configure_d3d12_draw_state(command_list, *state, capture, draw, source_override);
     return capture->replay(reinterpret_cast<void *>(command_list->get_native()), uv,
                            material.value, draw, source_override);
 }

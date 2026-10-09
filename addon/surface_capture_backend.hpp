@@ -57,6 +57,15 @@ struct DrawCommand {
     std::uint64_t depth_stencil_view = 0;
     bool target_compatible = false;
     bool inside_render_pass = false;
+    // Pixel-shader source selected by the add-on's descriptor tracker. Explicit
+    // APIs need the register space as well as the register index when compiling
+    // a companion capture shader. A zero view means source color is unavailable.
+    std::uint64_t source_view = 0;
+    std::uint32_t source_register = 0;
+    std::uint32_t source_space = 0;
+    std::uint32_t sampler_register = 0;
+    std::uint32_t sampler_space = 0;
+    bool source_sampleable = false;
 };
 
 struct ReplacementMip {

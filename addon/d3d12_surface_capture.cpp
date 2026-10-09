@@ -56,6 +56,11 @@ struct PipelineKey {
     std::uint64_t material = 0;
     std::string semantic;
     std::uint32_t semantic_index = 0;
+    std::uint32_t source_register = 0;
+    std::uint32_t source_space = 0;
+    std::uint32_t sampler_register = 0;
+    std::uint32_t sampler_space = 0;
+    bool source_sampleable = false;
 
     bool operator==(const PipelineKey &) const = default;
 };
@@ -68,6 +73,16 @@ struct PipelineKeyHash {
         value ^= std::hash<std::string> {}(key.semantic) + 0x9e3779b9u +
             (value << 6) + (value >> 2);
         value ^= std::hash<std::uint32_t> {}(key.semantic_index) + 0x9e3779b9u +
+            (value << 6) + (value >> 2);
+        value ^= std::hash<std::uint32_t> {}(key.source_register) + 0x9e3779b9u +
+            (value << 6) + (value >> 2);
+        value ^= std::hash<std::uint32_t> {}(key.source_space) + 0x9e3779b9u +
+            (value << 6) + (value >> 2);
+        value ^= std::hash<std::uint32_t> {}(key.sampler_register) + 0x9e3779b9u +
+            (value << 6) + (value >> 2);
+        value ^= std::hash<std::uint32_t> {}(key.sampler_space) + 0x9e3779b9u +
+            (value << 6) + (value >> 2);
+        value ^= std::hash<bool> {}(key.source_sampleable) + 0x9e3779b9u +
             (value << 6) + (value >> 2);
         return value;
     }
@@ -254,8 +269,11 @@ struct SurfaceCapture::Impl {
 
     reshade::api::pipeline capture_pipeline(std::uint64_t source_pipeline,
                                             const capture::UvInput &uv,
-                                            std::uint64_t material_id) {
-        PipelineKey key {source_pipeline, material_id, uv.name, uv.index};
+                                            std::uint64_t material_id,
+                                            const capture::DrawCommand &draw) {
+        PipelineKey key {source_pipeline, material_id, uv.name, uv.index,
+            draw.source_register, draw.source_space, draw.sampler_register,
+            draw.sampler_space, draw.source_sampleable};
         if (const auto found = variants.find(key); found != variants.end()) return found->second;
         const auto known = pipelines.find(source_pipeline);
         if (known == pipelines.end() || api_device == nullptr || uv.name.empty()) return {};
@@ -265,6 +283,11 @@ struct SurfaceCapture::Impl {
                 return std::isalnum(value) != 0 || value == '_';
             })) return {};
         std::ostringstream hlsl;
+        if (draw.source_sampleable)
+            hlsl << "Texture2D<float4> source_texture : register(t"
+                 << draw.source_register << ", space" << draw.source_space
+                 << "); SamplerState source_sampler : register(s"
+                 << draw.sampler_register << ", space" << draw.sampler_space << ");\n";
         hlsl << "struct Input { float4 position : SV_Position; float2 uv : "
              << uv.name << uv.index << "; };\n"
              << "struct Output { uint4 surface : SV_Target0; float4 gradients : SV_Target1; "
@@ -273,15 +296,18 @@ struct SurfaceCapture::Impl {
              << static_cast<std::uint32_t>(material_id) << "u,"
              << static_cast<std::uint32_t>(material_id >> 32)
              << "u,asuint(input.uv.x),asuint(input.uv.y)); float2 dx=ddx(input.uv); "
-                "float2 dy=ddy(input.uv); output.gradients=float4(dx.x,dy.x,dx.y,dy.y); "
-                "output.source=float4(asfloat(0x7fc00000u),asfloat(0x7fc00000u),"
-                "asfloat(0x7fc00000u),asfloat(0x7fc00000u)); output.depth=input.position.z; "
-                "return output; }";
+                "float2 dy=ddy(input.uv); output.gradients=float4(dx.x,dy.x,dx.y,dy.y); ";
+        if (draw.source_sampleable)
+            hlsl << "output.source=source_texture.SampleGrad(source_sampler,input.uv,dx,dy); ";
+        else
+            hlsl << "output.source=float4(asfloat(0x7fc00000u),asfloat(0x7fc00000u),"
+                    "asfloat(0x7fc00000u),asfloat(0x7fc00000u)); ";
+        hlsl << "output.depth=input.position.z; return output; }";
         ID3DBlob *bytecode = nullptr;
         ID3DBlob *errors = nullptr;
         const auto text = hlsl.str();
         const auto compiled = D3DCompile(text.data(), text.size(), "NeuralPassD3D12Capture",
-            nullptr, nullptr, "main", "ps_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0,
+            nullptr, nullptr, "main", "ps_5_1", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0,
             &bytecode, &errors);
         release(errors);
         if (FAILED(compiled) || bytecode == nullptr) { release(bytecode); return {}; }
@@ -589,7 +615,7 @@ bool SurfaceCapture::replay(void *native_command_list, const capture::UvInput &u
     auto *commands = static_cast<ID3D12GraphicsCommandList *>(native_command_list);
     if (commands->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT) return false;
     const auto capture_pipeline = impl_->capture_pipeline(
-        draw.pipeline, uv, material_id);
+        draw.pipeline, uv, material_id, draw);
     if (capture_pipeline == 0) return false;
     if (!impl_->cleared) impl_->clear(commands);
 

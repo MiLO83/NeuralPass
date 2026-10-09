@@ -27,10 +27,11 @@ The evidence-backed implementation status is tracked in
 test or release artifact; `[~]` means the production path is still incomplete.
 
 The generic path uses framebuffer color confidence. The core accepts depth,
-motion, mesh UV gradients, binding identity, and visibility classes, but only
-the experimental D3D11 adapter supplies exact rasterized mesh UVs and gradients.
-The D3D12 adapter is an earlier preview with WARP-tested resources, barriers, and
-readback but no replacement path or real-game validation yet.
+motion, mesh UV gradients, binding identity, and visibility classes. The
+experimental D3D11 and D3D12 adapters supply exact rasterized mesh UVs and
+gradients; D3D12 now also samples a descriptor-tracked source texture when a
+compatible texture/sampler pair is bound. It still has no replacement path or
+real-game validation.
 
 ## Build
 

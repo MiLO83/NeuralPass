@@ -153,7 +153,9 @@ restored before control returns to the game.
 The D3D12 preview records complete graphics-pipeline creation metadata and builds
 material-specific companion PSOs with the same root signature, vertex stages,
 input layout, topology, rasterizer state, and depth format. Its pixel shader writes
-the canonical identity/UV, derivative, source, and depth planes. Capture forces
+the canonical identity/UV, derivative, source, and depth planes. Bounded pixel
+descriptor tables are inspected for a sampleable 2D source and sampler, including
+D3D12 register spaces; unavailable or unsafe candidates remain NaN. Capture forces
 single-sample MRTs, disables blending and depth writes, and uses equal depth testing.
 
 Direct, indexed, and their GPU argument-buffer variants execute the application draw
