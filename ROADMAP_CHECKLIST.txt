@@ -39,8 +39,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     ordered motion-source integration remains.
 [~] Classify known, disoccluded, newly front-facing, off-screen-entry, first-observation,
     and unsupported samples.
-    Evidence: backend-neutral dense classifier tests every cause and camera-cut reset;
-    live motion/depth adapter feeds remain.
+    Evidence: backend-neutral dense tests cover every cause and camera-cut reset;
+    the live D3D11 worker classifies consecutive device-depth surfaces and exposes
+    counts in the overlay. Motion-aware reprojection and linear-depth feeds remain.
 [x] Add manual Keep current scene, Start new scene, and Merge scene controls.
     Evidence: ReShade overlay commands, forced namespace/merge worker paths, and
     tracker/catalog control tests; Windows add-on build passes.
@@ -139,10 +140,13 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 -------------------------
 [ ] Moving occluder inpaints only newly visible UV texels.
 [ ] Camera rotation/off-screen entry fills newly visible texels in the same scene.
-[ ] Same-scene hard cuts preserve atlases; new-scene cuts isolate generations.
-[ ] Returning views reuse established coverage without regeneration.
+[x] Same-scene hard cuts preserve atlases; new-scene cuts isolate generations.
+    Evidence: camera-cut preservation and confirmed-new-scene generation tests.
+[x] Returning views reuse established coverage without regeneration.
+    Evidence: zero-reveal covered-plan test plus persistent returning-view catalog test.
 [ ] Permanently invisible texels remain identical to the source.
-[ ] Direct observations replace earlier inpainted texels.
+[x] Direct observations replace earlier inpainted texels.
+    Evidence: provenance supersession test verifies color, coverage, alpha, and no reschedule.
 [ ] Shared sources with distinct bindings receive separate replacements.
 [ ] UV seams, overlapping UVs, alpha cutouts, HDR, and depth conflicts remain isolated.
 [ ] D3D9 reference, D3D10/11/12 WARP, and Vulkan SwiftShader suites pass.

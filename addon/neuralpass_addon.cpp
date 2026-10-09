@@ -10,6 +10,7 @@
 #include "neuralpass/texture_baker.hpp"
 #include "neuralpass/temporal.hpp"
 #include "neuralpass/tile_scheduler.hpp"
+#include "neuralpass/visibility.hpp"
 
 #include <Windows.h>
 #include <algorithm>
@@ -750,6 +751,7 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::atomic_uint64_t submitted = 0;
     std::atomic_uint64_t completed = 0;
     std::atomic_uint64_t dropped = 0;
+    std::array<std::atomic_uint64_t, 6> visibility_counts {};
     std::atomic_uint32_t tile_budget = 2;
     std::atomic_uint32_t refresh_age = 120;
     std::atomic_bool reset_requested = false;
@@ -1085,6 +1087,7 @@ void process_frames(RuntimeState *state, std::stop_token token) {
     };
     std::optional<BridgeBakeContext> bridge_bake;
     Image<Color> previous_scene;
+    std::optional<neuralpass::SurfaceCaptureFrame> previous_surface;
 
     while (!token.stop_requested()) {
         CapturedFrame frame;
@@ -1099,14 +1102,23 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             state->has_pending = false;
         }
         const Image<Color> current = unpack(frame);
-        auto correspondence = surface && surface->width() == frame.width &&
-                surface->height() == frame.height
-            ? surface->correspondences() : std::vector<neuralpass::SurfaceCorrespondence> {};
         HistoryFrame cut_reference;
         cut_reference.source = previous_scene;
         const bool visual_cut = !previous_scene.empty() &&
             neuralpass::is_camera_cut(current, cut_reference);
         previous_scene = current;
+        std::vector<neuralpass::SurfaceCorrespondence> correspondence;
+        if (surface && surface->width() == frame.width && surface->height() == frame.height) {
+            const auto visibility = neuralpass::classify_visibility(
+                *surface, visual_cut || !previous_surface ? nullptr : &*previous_surface, nullptr);
+            for (std::size_t index = 0; index < visibility.counts.size(); ++index)
+                state->visibility_counts[index] = visibility.counts[index];
+            correspondence = surface->correspondences();
+            previous_surface = std::move(surface);
+        } else {
+            previous_surface.reset();
+            for (auto &count : state->visibility_counts) count = 0;
+        }
         auto transition = scene_transitions.observe(visual_cut, correspondence);
         const auto visible_stable = stable_visible(correspondence);
         const auto manual = static_cast<ManualSceneCommand>(state->scene_command.exchange(
@@ -1636,6 +1648,19 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         static_cast<unsigned long long>(state->submitted.load()),
         static_cast<unsigned long long>(state->completed.load()),
         static_cast<unsigned long long>(state->dropped.load()));
+    ImGui::Text("Visibility K:%llu D:%llu F:%llu O:%llu First:%llu Unsupported:%llu",
+        static_cast<unsigned long long>(state->visibility_counts[
+            static_cast<std::size_t>(neuralpass::VisibilityClass::known_visible)].load()),
+        static_cast<unsigned long long>(state->visibility_counts[
+            static_cast<std::size_t>(neuralpass::VisibilityClass::disoccluded)].load()),
+        static_cast<unsigned long long>(state->visibility_counts[
+            static_cast<std::size_t>(neuralpass::VisibilityClass::newly_front_facing)].load()),
+        static_cast<unsigned long long>(state->visibility_counts[
+            static_cast<std::size_t>(neuralpass::VisibilityClass::offscreen_entry)].load()),
+        static_cast<unsigned long long>(state->visibility_counts[
+            static_cast<std::size_t>(neuralpass::VisibilityClass::first_observation)].load()),
+        static_cast<unsigned long long>(state->visibility_counts[
+            static_cast<std::size_t>(neuralpass::VisibilityClass::unsupported)].load()));
     ImGui::SeparatorText("Experimental mesh texture baker");
     ImGui::Text("Pipelines: %llu  UV pipelines: %llu",
         static_cast<unsigned long long>(g_pipelines_seen.load()),

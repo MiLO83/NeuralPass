@@ -168,6 +168,14 @@ Windows WARP test covers indexed and non-indexed replay, derivative capture,
 and state restoration. Capture frames and framebuffer frames are paired by GPU
 sequence number before reveal-only atlas generation.
 
+The live worker classifies each captured D3D11 pixel as known-visible,
+disoccluded, newly front-facing, off-screen entry, first observation, or
+unsupported and reports the current counts in the overlay. A camera cut passes
+no previous surface to the classifier, so the new view becomes direct
+first-observation evidence while the reveal-only atlas planner still schedules
+its uncovered UVs. Missing capture frames break the comparison chain rather
+than reprojecting across an unknown gap.
+
 D3D9/10, D3D12, and Vulkan still require equivalent adapters, and the D3D11
 path needs broad real-game compatibility testing. Unsupported APIs, shader
 signatures, deferred contexts, render-target sizes, and MSAA draws retain the
