@@ -156,9 +156,12 @@ framebuffer rather than sampling a debug sentinel.
 
 The ReShade add-on has an experimental D3D11 surface adapter. It reflects the
 vertex shader's rasterized `TEXCOORD`, executes the game's draw once, then
-replays it into an `RGBA32_UINT` identity/UV target and an `RGBA32_FLOAT`
-gradient target. A three-slot staging ring asynchronously decodes the 64-bit
-pipeline-plus-descriptor binding ID, exact UV, and `ddx`/`ddy` footprint. A
+replays it into an `RGBA32_UINT` identity/UV target plus `RGBA32_FLOAT`
+gradient and source-color targets. The adapter ranks currently bound sampleable
+2D color SRVs, samples its aggressive base-color candidate with the mesh UV,
+and emits NaN when no trustworthy texture/sampler pair exists. A three-slot
+staging ring asynchronously decodes the 64-bit pipeline-plus-descriptor binding
+ID, exact UV, `ddx`/`ddy` footprint, and source texel. A
 Windows WARP test covers indexed and non-indexed replay, derivative capture,
 and state restoration. Capture frames and framebuffer frames are paired by GPU
 sequence number before reveal-only atlas generation.
@@ -197,6 +200,8 @@ backend without starting the game.
 - The D3D11 replay shader cannot reproduce application pixel-shader `discard`
   or alpha-test logic yet, so cutout/translucent materials may produce invalid
   correspondence around transparent texels.
+- D3D11 base-color selection is currently heuristic. A normal/emissive texture
+  can be selected in unusual material layouts until per-binding override UI lands.
 - v0.1 supports SDR RGBA8 capture. HDR/scRGB is not processed correctly yet.
 - The screen-space fallback cannot follow large camera motion as accurately as
   engine motion vectors; changed pixels are invalidated and restyled instead.

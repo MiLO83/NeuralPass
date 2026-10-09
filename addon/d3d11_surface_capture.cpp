@@ -6,6 +6,7 @@
 #include <array>
 #include <cctype>
 #include <cstring>
+#include <limits>
 #include <sstream>
 #include <unordered_map>
 
@@ -22,6 +23,8 @@ struct ShaderKey {
     std::uint32_t semantic_index = 0;
     std::uint32_t register_index = 0;
     std::uint64_t material_id = 0;
+    int source_slot = -1;
+    int sampler_slot = -1;
 
     bool operator==(const ShaderKey &) const = default;
 };
@@ -35,6 +38,10 @@ struct ShaderKeyHash {
             (result << 6) + (result >> 2);
         result ^= std::hash<std::uint64_t> {}(key.material_id) + 0x9e3779b9u +
             (result << 6) + (result >> 2);
+        result ^= std::hash<int> {}(key.source_slot) + 0x9e3779b9u +
+            (result << 6) + (result >> 2);
+        result ^= std::hash<int> {}(key.sampler_slot) + 0x9e3779b9u +
+            (result << 6) + (result >> 2);
         return result;
     }
 };
@@ -47,12 +54,94 @@ struct DepthVariant {
 struct ReadbackSlot {
     ID3D11Texture2D *texture = nullptr;
     ID3D11Texture2D *gradients = nullptr;
+    ID3D11Texture2D *source = nullptr;
     ID3D11Query *query = nullptr;
     bool in_flight = false;
     std::uint64_t frame_index = 0;
 };
 
 constexpr std::array<float, 4> k_clear {0.0f, 0.0f, 0.0f, 0.0f};
+const std::array<float, 4> k_missing_source {
+    std::numeric_limits<float>::quiet_NaN(),
+    std::numeric_limits<float>::quiet_NaN(),
+    std::numeric_limits<float>::quiet_NaN(),
+    std::numeric_limits<float>::quiet_NaN()};
+
+struct SourceBinding {
+    int texture_slot = -1;
+    int sampler_slot = -1;
+    [[nodiscard]] bool valid() const noexcept {
+        return texture_slot >= 0 && sampler_slot >= 0;
+    }
+};
+
+bool color_sample_format(DXGI_FORMAT format) {
+    switch (format) {
+    case DXGI_FORMAT_R8G8B8A8_UNORM:
+    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+    case DXGI_FORMAT_B8G8R8A8_UNORM:
+    case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+    case DXGI_FORMAT_B8G8R8X8_UNORM:
+    case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+    case DXGI_FORMAT_BC1_UNORM:
+    case DXGI_FORMAT_BC1_UNORM_SRGB:
+    case DXGI_FORMAT_BC2_UNORM:
+    case DXGI_FORMAT_BC2_UNORM_SRGB:
+    case DXGI_FORMAT_BC3_UNORM:
+    case DXGI_FORMAT_BC3_UNORM_SRGB:
+    case DXGI_FORMAT_BC7_UNORM:
+    case DXGI_FORMAT_BC7_UNORM_SRGB:
+    case DXGI_FORMAT_R16G16B16A16_FLOAT:
+    case DXGI_FORMAT_R32G32B32A32_FLOAT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+SourceBinding select_source_binding(ID3D11DeviceContext *context) {
+    std::array<ID3D11ShaderResourceView *, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT> views {};
+    std::array<ID3D11SamplerState *, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT> samplers {};
+    context->PSGetShaderResources(0, static_cast<UINT>(views.size()), views.data());
+    context->PSGetSamplers(0, static_cast<UINT>(samplers.size()), samplers.data());
+    int best_slot = -1;
+    std::uint64_t best_score = 0;
+    for (std::size_t slot = 0; slot < views.size(); ++slot) {
+        auto *view = views[slot];
+        if (view == nullptr) continue;
+        D3D11_SHADER_RESOURCE_VIEW_DESC view_desc {};
+        view->GetDesc(&view_desc);
+        if (view_desc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D ||
+            !color_sample_format(view_desc.Format)) continue;
+        ID3D11Resource *resource = nullptr;
+        ID3D11Texture2D *texture = nullptr;
+        view->GetResource(&resource);
+        if (resource != nullptr)
+            resource->QueryInterface(__uuidof(ID3D11Texture2D),
+                                     reinterpret_cast<void **>(&texture));
+        release(resource);
+        if (texture == nullptr) continue;
+        D3D11_TEXTURE2D_DESC desc {};
+        texture->GetDesc(&desc);
+        release(texture);
+        if (desc.SampleDesc.Count != 1 || desc.Width < 4 || desc.Height < 4) continue;
+        std::uint64_t score = static_cast<std::uint64_t>(desc.Width) * desc.Height;
+        score += static_cast<std::uint64_t>(desc.MipLevels) << 24;
+        if ((desc.BindFlags & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_DEPTH_STENCIL)) == 0)
+            score += std::uint64_t {1} << 56;
+        if (score > best_score) { best_score = score; best_slot = static_cast<int>(slot); }
+    }
+    int sampler_slot = -1;
+    if (best_slot >= 0 && best_slot < static_cast<int>(samplers.size()) &&
+        samplers[static_cast<std::size_t>(best_slot)] != nullptr)
+        sampler_slot = best_slot;
+    if (sampler_slot < 0)
+        for (std::size_t slot = 0; slot < samplers.size(); ++slot)
+            if (samplers[slot] != nullptr) { sampler_slot = static_cast<int>(slot); break; }
+    for (auto *&view : views) release(view);
+    for (auto *&sampler : samplers) release(sampler);
+    return {best_slot, sampler_slot};
+}
 
 } // namespace
 
@@ -62,6 +151,8 @@ struct SurfaceCapture::Impl {
     ID3D11RenderTargetView *target_view = nullptr;
     ID3D11Texture2D *gradient_target = nullptr;
     ID3D11RenderTargetView *gradient_target_view = nullptr;
+    ID3D11Texture2D *source_target = nullptr;
+    ID3D11RenderTargetView *source_target_view = nullptr;
     std::array<ReadbackSlot, 3> readback;
     std::unordered_map<ShaderKey, ID3D11PixelShader *, ShaderKeyHash> shaders;
     std::unordered_map<ID3D11DepthStencilState *, DepthVariant> depth_variants;
@@ -73,27 +164,39 @@ struct SurfaceCapture::Impl {
     std::uint64_t dropped_frames = 0;
     bool target_cleared = false;
 
-    ID3D11PixelShader *shader(const UvSemantic &uv, std::uint64_t material_id) {
-        const ShaderKey key {uv.name, uv.index, uv.register_index, material_id};
+    ID3D11PixelShader *shader(const UvSemantic &uv, std::uint64_t material_id,
+                             SourceBinding source_binding) {
+        const ShaderKey key {uv.name, uv.index, uv.register_index, material_id,
+                             source_binding.texture_slot, source_binding.sampler_slot};
         if (const auto known = shaders.find(key); known != shaders.end()) return known->second;
 
         if (uv.name.empty() || !std::all_of(uv.name.begin(), uv.name.end(), [](unsigned char value) {
                 return std::isalnum(value) != 0 || value == '_';
             })) return nullptr;
         std::ostringstream source;
+        if (source_binding.valid())
+            source << "Texture2D<float4> source_texture : register(t"
+                   << source_binding.texture_slot << "); SamplerState source_sampler : register(s"
+                   << source_binding.sampler_slot << ");\n";
         // SV_Position occupies input register zero in ordinary rasterized
         // vertex outputs. Declaring it keeps the selected TEXCOORD on the same
         // linkage register as the game's vertex shader rather than accidentally
         // reading clip-space XY as UV.
         source << "struct Input { float4 position : SV_Position; float2 uv : "
                << uv.name << uv.index << "; };\n"
-               << "struct Output { uint4 surface : SV_Target0; float4 gradients : SV_Target1; };\n"
+               << "struct Output { uint4 surface : SV_Target0; float4 gradients : SV_Target1; "
+               << "float4 source : SV_Target2; };\n"
                << "Output main(Input input) { Output output; output.surface = uint4("
                << static_cast<std::uint32_t>(material_id) << "u,"
                << static_cast<std::uint32_t>(material_id >> 32) << "u,"
                << "asuint(input.uv.x),asuint(input.uv.y)); "
                << "float2 dx = ddx(input.uv); float2 dy = ddy(input.uv); "
-               << "output.gradients = float4(dx.x,dy.x,dx.y,dy.y); return output; }\n";
+               << "output.gradients = float4(dx.x,dy.x,dx.y,dy.y); "
+               << (source_binding.valid()
+                    ? "output.source = source_texture.Sample(source_sampler,input.uv); "
+                    : "output.source = float4(asfloat(0x7fc00000u),asfloat(0x7fc00000u),"
+                      "asfloat(0x7fc00000u),asfloat(0x7fc00000u)); ")
+               << "return output; }\n";
         ID3DBlob *bytecode = nullptr;
         ID3DBlob *errors = nullptr;
         const auto text = source.str();
@@ -200,6 +303,7 @@ struct SurfaceCapture::Impl {
         if (!target_cleared) {
             context->ClearRenderTargetView(target_view, k_clear.data());
             context->ClearRenderTargetView(gradient_target_view, k_clear.data());
+            context->ClearRenderTargetView(source_target_view, k_missing_source.data());
             target_cleared = true;
         }
         std::uint32_t uav_count = 0;
@@ -220,11 +324,13 @@ struct SurfaceCapture::Impl {
         UINT stencil_reference = 0;
         context->OMGetDepthStencilState(&original_depth, &stencil_reference);
 
-        auto *capture_shader = shader(uv, material_id);
+        const auto source_binding = select_source_binding(context);
+        auto *capture_shader = shader(uv, material_id, source_binding);
         auto *capture_depth_state = capture_depth(original_depth);
         if (capture_shader != nullptr && (original_depth == nullptr || capture_depth_state != nullptr)) {
-            ID3D11RenderTargetView *capture_targets[2] {target_view, gradient_target_view};
-            context->OMSetRenderTargets(2, capture_targets, dsv);
+            ID3D11RenderTargetView *capture_targets[3] {
+                target_view, gradient_target_view, source_target_view};
+            context->OMSetRenderTargets(3, capture_targets, dsv);
             context->OMSetBlendState(nullptr, nullptr, UINT_MAX);
             context->OMSetDepthStencilState(capture_depth_state, stencil_reference);
             context->PSSetShader(capture_shader, nullptr, 0);
@@ -267,12 +373,15 @@ struct SurfaceCapture::Impl {
         for (auto &slot : readback) {
             release(slot.texture);
             release(slot.gradients);
+            release(slot.source);
             release(slot.query);
         }
         release(target_view);
         release(target);
         release(gradient_target_view);
         release(gradient_target);
+        release(source_target_view);
+        release(source_target);
         release(device);
     }
 };
@@ -339,6 +448,15 @@ bool SurfaceCapture::initialize(ID3D11Device *device, std::uint32_t width,
         delete implementation;
         return false;
     }
+    D3D11_TEXTURE2D_DESC source_desc = target_desc;
+    source_desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    if (FAILED(device->CreateTexture2D(&source_desc, nullptr,
+                                      &implementation->source_target)) ||
+        FAILED(device->CreateRenderTargetView(implementation->source_target, nullptr,
+                                              &implementation->source_target_view))) {
+        delete implementation;
+        return false;
+    }
     D3D11_TEXTURE2D_DESC staging_desc = target_desc;
     staging_desc.Usage = D3D11_USAGE_STAGING;
     staging_desc.BindFlags = 0;
@@ -348,9 +466,14 @@ bool SurfaceCapture::initialize(ID3D11Device *device, std::uint32_t width,
     gradient_staging.Usage = D3D11_USAGE_STAGING;
     gradient_staging.BindFlags = 0;
     gradient_staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    D3D11_TEXTURE2D_DESC source_staging = source_desc;
+    source_staging.Usage = D3D11_USAGE_STAGING;
+    source_staging.BindFlags = 0;
+    source_staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
     for (auto &slot : implementation->readback) {
         if (FAILED(device->CreateTexture2D(&staging_desc, nullptr, &slot.texture)) ||
             FAILED(device->CreateTexture2D(&gradient_staging, nullptr, &slot.gradients)) ||
+            FAILED(device->CreateTexture2D(&source_staging, nullptr, &slot.source)) ||
             FAILED(device->CreateQuery(&query_desc, &slot.query))) {
             delete implementation;
             return false;
@@ -412,17 +535,22 @@ std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
                 D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) continue;
         D3D11_MAPPED_SUBRESOURCE mapped {};
         D3D11_MAPPED_SUBRESOURCE gradient_mapped {};
+        D3D11_MAPPED_SUBRESOURCE source_mapped {};
         if (SUCCEEDED(context->Map(slot.texture, 0, D3D11_MAP_READ, 0, &mapped)) &&
-            SUCCEEDED(context->Map(slot.gradients, 0, D3D11_MAP_READ, 0, &gradient_mapped))) {
+            SUCCEEDED(context->Map(slot.gradients, 0, D3D11_MAP_READ, 0, &gradient_mapped)) &&
+            SUCCEEDED(context->Map(slot.source, 0, D3D11_MAP_READ, 0, &source_mapped))) {
             SurfaceCaptureFrame frame(impl_->width, impl_->height, slot.frame_index);
             for (std::uint32_t y = 0; y < impl_->height; ++y) {
                 const auto *row = static_cast<const std::uint8_t *>(mapped.pData) +
                     static_cast<std::size_t>(y) * mapped.RowPitch;
                 const auto *gradient_row = static_cast<const std::uint8_t *>(gradient_mapped.pData) +
                     static_cast<std::size_t>(y) * gradient_mapped.RowPitch;
+                const auto *source_row = static_cast<const std::uint8_t *>(source_mapped.pData) +
+                    static_cast<std::size_t>(y) * source_mapped.RowPitch;
                 for (std::uint32_t x = 0; x < impl_->width; ++x) {
                     const auto *encoded = reinterpret_cast<const std::uint32_t *>(row) + x * 4;
                     const auto *gradient = reinterpret_cast<const float *>(gradient_row) + x * 4;
+                    const auto *source = reinterpret_cast<const float *>(source_row) + x * 4;
                     auto &pixel = frame.pixels().at(x, y);
                     pixel.material_id = static_cast<std::uint64_t>(encoded[0]) |
                         (static_cast<std::uint64_t>(encoded[1]) << 32);
@@ -433,14 +561,21 @@ std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
                     pixel.du_dy = gradient[1];
                     pixel.dv_dx = gradient[2];
                     pixel.dv_dy = gradient[3];
+                    pixel.source_r = source[0];
+                    pixel.source_g = source[1];
+                    pixel.source_b = source[2];
+                    pixel.source_a = source[3];
                 }
             }
+            context->Unmap(slot.source, 0);
             context->Unmap(slot.gradients, 0);
             context->Unmap(slot.texture, 0);
             result = std::move(frame);
         } else {
             // Mapping the identity surface may have succeeded before the
             // gradient surface failed; unmap only that first resource.
+            if (source_mapped.pData != nullptr) context->Unmap(slot.source, 0);
+            if (gradient_mapped.pData != nullptr) context->Unmap(slot.gradients, 0);
             if (mapped.pData != nullptr) context->Unmap(slot.texture, 0);
         }
         slot.in_flight = false;
@@ -451,10 +586,12 @@ std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
         if (!impl_->target_cleared) {
             context->ClearRenderTargetView(impl_->target_view, k_clear.data());
             context->ClearRenderTargetView(impl_->gradient_target_view, k_clear.data());
+            context->ClearRenderTargetView(impl_->source_target_view, k_missing_source.data());
             impl_->target_cleared = true;
         }
         context->CopyResource(next.texture, impl_->target);
         context->CopyResource(next.gradients, impl_->gradient_target);
+        context->CopyResource(next.source, impl_->source_target);
         context->End(next.query);
         next.in_flight = true;
         next.frame_index = impl_->next_frame_index++;
@@ -464,6 +601,7 @@ std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
     }
     context->ClearRenderTargetView(impl_->target_view, k_clear.data());
     context->ClearRenderTargetView(impl_->gradient_target_view, k_clear.data());
+    context->ClearRenderTargetView(impl_->source_target_view, k_missing_source.data());
     return result;
 }
 

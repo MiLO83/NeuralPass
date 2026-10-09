@@ -58,7 +58,7 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     Evidence: commit accepts only reveal-mask correspondences.
 [~] Convert styled framebuffer appearance into a linear source-texture transfer.
     Evidence: bounded linear-light ratio transfer is integrated into bake commit with
-    source-alpha tests; graphics adapters still need base-texture sample capture.
+    source-alpha tests; D3D11 captures an aggressively selected source sample in a third MRT.
 [x] Implement confidence-weighted elliptical UV splatting.
     Evidence: bounded anisotropic-footprint and confidence-accumulation core test;
     D3D11 WARP verifies captured screen-space UV derivatives.
@@ -86,7 +86,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [ ] Production Vulkan x86/x64 capture and replacement.
 [ ] Support indexed, non-indexed, instanced, and indirect draws.
 [ ] Restore every touched pipeline, descriptor, target, depth, UAV, and dynamic state.
-[ ] Implement aggressive base-color binding selection and manual correction.
+[~] Implement aggressive base-color binding selection and manual correction.
+    Evidence: D3D11 ranks bound sampleable 2D color SRVs and captures the selected
+    source texel with its sampler; manual per-binding correction remains.
 [ ] Add per-binding circuit breakers and accurate unsupported-path reporting.
 
 4. MANAGED NEURAL RUNTIME

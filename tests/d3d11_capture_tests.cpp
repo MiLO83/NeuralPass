@@ -147,6 +147,37 @@ void test_triangle_replay_produces_material_uv() {
     const D3D11_VIEWPORT viewport {0.0f, 0.0f, 8.0f, 8.0f, 0.0f, 1.0f};
     context->RSSetViewports(1, &viewport);
 
+    std::array<std::uint8_t, 4 * 4 * 4> source_pixels {};
+    for (std::size_t index = 0; index < source_pixels.size(); index += 4) {
+        source_pixels[index + 0] = 64;
+        source_pixels[index + 1] = 128;
+        source_pixels[index + 2] = 192;
+        source_pixels[index + 3] = 77;
+    }
+    D3D11_TEXTURE2D_DESC source_desc {};
+    source_desc.Width = source_desc.Height = 4;
+    source_desc.MipLevels = source_desc.ArraySize = 1;
+    source_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    source_desc.SampleDesc.Count = 1;
+    source_desc.Usage = D3D11_USAGE_IMMUTABLE;
+    source_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    const D3D11_SUBRESOURCE_DATA source_data {source_pixels.data(), 4 * 4, 0};
+    ID3D11Texture2D *source_texture = nullptr;
+    ID3D11ShaderResourceView *source_view = nullptr;
+    require(SUCCEEDED(device->CreateTexture2D(&source_desc, &source_data, &source_texture)) &&
+            SUCCEEDED(device->CreateShaderResourceView(source_texture, nullptr, &source_view)),
+        "could not create source texture capture fixture");
+    D3D11_SAMPLER_DESC sampler_desc {};
+    sampler_desc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+    sampler_desc.AddressU = sampler_desc.AddressV = sampler_desc.AddressW =
+        D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler_desc.MaxLOD = D3D11_FLOAT32_MAX;
+    ID3D11SamplerState *source_sampler = nullptr;
+    require(SUCCEEDED(device->CreateSamplerState(&sampler_desc, &source_sampler)),
+        "could not create source sampler fixture");
+    context->PSSetShaderResources(3, 1, &source_view);
+    context->PSSetSamplers(3, 1, &source_sampler);
+
     neuralpass::d3d11_capture::SurfaceCapture capture;
     require(capture.initialize(device, 8, 8), "could not initialize surface capture");
     constexpr std::uint64_t first_material_id = 0x12345678abcdef01ull;
@@ -201,8 +232,18 @@ void test_triangle_replay_produces_material_uv() {
             std::abs(center.du_dx) + std::abs(center.du_dy) +
                 std::abs(center.dv_dx) + std::abs(center.dv_dy) > 0.01f,
         "captured UV gradients are invalid");
+    require(std::isfinite(center.source_r) && std::isfinite(center.source_g) &&
+            std::isfinite(center.source_b) && std::isfinite(center.source_a) &&
+            std::abs(center.source_r - 64.0f/255.0f) < 0.01f &&
+            std::abs(center.source_g - 128.0f/255.0f) < 0.01f &&
+            std::abs(center.source_b - 192.0f/255.0f) < 0.01f &&
+            std::abs(center.source_a - 77.0f/255.0f) < 0.01f,
+        "captured base/source texture sample is invalid");
 
     capture.reset();
+    release(source_sampler);
+    release(source_view);
+    release(source_texture);
     release(depth_state);
     release(blend_state);
     release(target_view);

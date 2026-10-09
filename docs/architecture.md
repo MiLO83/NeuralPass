@@ -100,9 +100,11 @@ The first live adapter uses draw replay rather than modifying the game's pixel
 shader. D3D reflection selects a floating-point `TEXCOORD` from the vertex
 shader's output signature. NeuralPass executes the original draw exactly once,
 then temporarily binds a capture pixel shader, an `RGBA32_UINT` identity/UV
-target, and an `RGBA32_FLOAT` derivative target while retaining vertex state,
-resources, viewport, rasterization, and depth. The capture shader stores the
-64-bit binding key, bit-exact interpolated UV, and screen-space UV derivatives.
+target, an `RGBA32_FLOAT` derivative target, and an `RGBA32_FLOAT` source-color
+target while retaining vertex state, resources, viewport, rasterization, and
+depth. The capture shader stores the 64-bit binding key, bit-exact interpolated
+UV, screen-space UV derivatives, and an aggressively selected sampled 2D source
+texel. Missing candidates are encoded as NaN and cannot enter source-transfer baking.
 Blend, depth/stencil, render targets, UAVs, and the original pixel shader are
 restored before control returns to the game.
 
