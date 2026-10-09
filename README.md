@@ -28,8 +28,9 @@ test or release artifact; `[~]` means the production path is still incomplete.
 
 The generic path uses framebuffer color confidence. The core accepts depth,
 motion, mesh UV gradients, binding identity, and visibility classes, but only
-the experimental D3D11 adapter currently supplies exact rasterized mesh UVs and
-gradients. NeuralPass does not claim generic geometry recovery on other APIs.
+the experimental D3D11 adapter supplies exact rasterized mesh UVs and gradients.
+The D3D12 adapter is an earlier preview with WARP-tested resources, barriers, and
+readback but no replacement path or real-game validation yet.
 
 ## Build
 
@@ -222,8 +223,9 @@ first-observation evidence while the reveal-only atlas planner still schedules
 its uncovered UVs. Missing capture frames break the comparison chain rather
 than reprojecting across an unknown gap.
 
-D3D9/10, D3D12, and Vulkan still require equivalent adapters, and the D3D11
-path needs broad real-game compatibility testing. Unsupported APIs, shader
+D3D9/10 and Vulkan still require equivalent adapters. D3D12 has experimental
+PSO replay and asynchronous capture, but descriptor-isolated replacement,
+render-pass replay, device-loss stress, and real-game evidence remain. Unsupported APIs, shader
 signatures, deferred contexts, render-target sizes, and MSAA draws retain the
 screen-space path instead of receiving guessed UV data. The canonical capture
 and multi-material baker remain API-neutral so every adapter emits the same
@@ -233,7 +235,7 @@ validated surface-frame contract.
 | --- | --- |
 | D3D11 | Experimental draw replay and RGBA8/BGRA8 replacement; automated WARP coverage |
 | D3D9 / D3D10 | Adapter required |
-| D3D12 | Adapter required |
+| D3D12 | Experimental direct/indirect PSO replay and readback; replacement and game validation pending |
 | Vulkan | Adapter required |
 
 Atlas snapshots use a versioned, checksummed `.npatlas` format. Writes create a

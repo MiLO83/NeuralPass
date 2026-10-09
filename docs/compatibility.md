@@ -7,10 +7,11 @@ full add-on build of ReShade. It is not suitable for protected multiplayer games
 
 | Area | Current status |
 | --- | --- |
-| Windows / x64 | Automated build, package, core tests, and D3D11 WARP tests |
+| Windows / x64 | Automated build, package, core tests, and D3D11/D3D12 WARP tests |
 | D3D11 | Experimental geometry capture and RGBA8/BGRA8 replacement |
 | D3D9 / D3D10 | Screen-space effect only; geometry adapter not implemented |
-| D3D12 / Vulkan | Screen-space effect only; geometry adapter not implemented |
+| D3D12 | Experimental PSO replay, barriers, fence/readback ring; replacement and real-game evidence pending |
+| Vulkan | Screen-space effect only; geometry adapter not implemented |
 | SDR RGBA8 | Supported preview path |
 | HDR / scRGB | Not supported correctly; leave NeuralPass disabled |
 | DirectML | Model execution smoke-tested on NVIDIA; AMD and Intel hardware validation remains |
@@ -55,7 +56,8 @@ user tokens, registry dumps, process lists, and arbitrary files.
 
 ## Troubleshooting order
 
-1. Confirm the game is x64 D3D11 and running without anti-cheat or protected multiplayer.
+1. Confirm the game is x64 D3D11 (or an explicitly tested D3D12 title) and running
+   without anti-cheat or protected multiplayer.
 2. Confirm ReShade itself opens and its Add-ons tab lists NeuralPass.
 3. Confirm `NeuralPass.addon64` is beside the active ReShade proxy DLL.
 4. Confirm `reshade-shaders/Shaders/NeuralPass.fx` exists and compiles in ReShade.

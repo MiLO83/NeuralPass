@@ -148,6 +148,24 @@ texel. Missing candidates are encoded as NaN and cannot enter source-transfer ba
 Blend, depth/stencil, render targets, UAVs, and the original pixel shader are
 restored before control returns to the game.
 
+### D3D12 replay adapter
+
+The D3D12 preview records complete graphics-pipeline creation metadata and builds
+material-specific companion PSOs with the same root signature, vertex stages,
+input layout, topology, rasterizer state, and depth format. Its pixel shader writes
+the canonical identity/UV, derivative, source, and depth planes. Capture forces
+single-sample MRTs, disables blending and depth writes, and uses equal depth testing.
+
+Direct, indexed, and their GPU argument-buffer variants execute the application draw
+once and the capture draw once on the same direct command list. The adapter restores
+the application's PSO and render/depth attachments. Four capture resources use
+explicit render-target/copy-source transitions and a three-slot readback ring with
+queue-ordered fences. WARP executes the allocation, barrier, copy, fence, and decode
+path. Native render-pass draws are currently rejected rather than illegally changing
+attachments inside an active pass. Descriptor-table cloning, coverage-safe replacement,
+DXIL-specific reflection beyond the input-declaration fallback, device-loss stress,
+and real-game validation remain required before D3D12 can be promoted.
+
 Capture uses equality depth testing with writes disabled, so replayed fragments
 must match the surface written by the original draw. Three staging textures and
 event queries provide readback without flushing or waiting. Each staging slot

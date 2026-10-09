@@ -40,6 +40,19 @@ if(NEURALPASS_BUILD_TESTS)
         target_link_libraries(neuralpass_d3d11_capture_tests PRIVATE
             neuralpass_core d3d11 d3dcompiler)
         add_test(NAME neuralpass_d3d11_capture COMMAND neuralpass_d3d11_capture_tests)
+        if(RESHADE_SDK_DIR AND EXISTS "${RESHADE_SDK_DIR}/include/reshade.hpp")
+            add_executable(neuralpass_d3d12_capture_tests
+                addon/d3d12_surface_capture.cpp
+                tests/d3d12_capture_tests.cpp)
+            target_include_directories(neuralpass_d3d12_capture_tests PRIVATE include addon
+                "${RESHADE_SDK_DIR}/include" "${RESHADE_SDK_DIR}/deps/imgui")
+            target_compile_features(neuralpass_d3d12_capture_tests PRIVATE cxx_std_20)
+            target_compile_definitions(neuralpass_d3d12_capture_tests PRIVATE
+                WIN32_LEAN_AND_MEAN NOMINMAX)
+            target_link_libraries(neuralpass_d3d12_capture_tests PRIVATE
+                neuralpass_core d3d12 dxgi d3dcompiler)
+            add_test(NAME neuralpass_d3d12_capture COMMAND neuralpass_d3d12_capture_tests)
+        endif()
     endif()
 endif()
 
@@ -52,13 +65,14 @@ if(NEURALPASS_BUILD_ADDON)
     endif()
     add_library(NeuralPassAddon SHARED
         addon/d3d11_surface_capture.cpp
+        addon/d3d12_surface_capture.cpp
         addon/neuralpass_addon.cpp
         "${RESHADE_SDK_DIR}/examples/utils/descriptor_tracking.cpp")
     target_compile_features(NeuralPassAddon PRIVATE cxx_std_20)
     target_include_directories(NeuralPassAddon PRIVATE include
         "${RESHADE_SDK_DIR}/include" "${RESHADE_SDK_DIR}/deps/imgui"
         "${RESHADE_SDK_DIR}/examples/utils")
-    target_link_libraries(NeuralPassAddon PRIVATE neuralpass_core d3d11 d3dcompiler)
+    target_link_libraries(NeuralPassAddon PRIVATE neuralpass_core d3d11 d3d12 d3dcompiler)
     target_compile_definitions(NeuralPassAddon PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(NeuralPassAddon PRIVATE /W4 /permissive-)
     if(EXISTS "${ONNXRUNTIME_ROOT}/include/onnxruntime_cxx_api.h")

@@ -3,6 +3,7 @@
 #include "neuralpass/surface_capture.hpp"
 
 #include <cstdint>
+#include <array>
 #include <limits>
 #include <optional>
 #include <string>
@@ -47,6 +48,15 @@ struct DrawCommand {
     std::uint64_t argument_offset = 0;
     std::uint32_t draw_count = 1;
     std::uint32_t argument_stride = 0;
+    // API-neutral snapshot of the graphics state required by explicit backends.
+    // Legacy immediate-context adapters may ignore these opaque handles.
+    std::uint64_t pipeline = 0;
+    std::uint64_t pipeline_layout = 0;
+    std::array<std::uint64_t, 8> render_target_views {};
+    std::uint32_t render_target_count = 0;
+    std::uint64_t depth_stencil_view = 0;
+    bool target_compatible = false;
+    bool inside_render_pass = false;
 };
 
 struct ReplacementMip {
