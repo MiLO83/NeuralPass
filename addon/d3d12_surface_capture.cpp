@@ -954,7 +954,8 @@ bool SurfaceCapture::replay(void *native_command_list, const capture::UvInput &u
         ++impl_->statistics.replacement_draws;
     }
     commands->SetPipelineState(reinterpret_cast<ID3D12PipelineState *>(capture_pipeline.handle));
-    D3D12_CPU_DESCRIPTOR_HANDLE capture_depth {draw.depth_stencil_view};
+    D3D12_CPU_DESCRIPTOR_HANDLE capture_depth {
+        static_cast<SIZE_T>(draw.depth_stencil_view)};
     commands->OMSetRenderTargets(static_cast<UINT>(impl_->target_views.size()),
         impl_->target_views.data(), FALSE,
         draw.depth_stencil_view != 0 ? &capture_depth : nullptr);
@@ -964,8 +965,9 @@ bool SurfaceCapture::replay(void *native_command_list, const capture::UvInput &u
         reinterpret_cast<ID3D12PipelineState *>(draw.pipeline));
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 8> original_targets {};
     for (std::uint32_t index = 0; index < draw.render_target_count; ++index)
-        original_targets[index].ptr = draw.render_target_views[index];
-    D3D12_CPU_DESCRIPTOR_HANDLE original_depth {draw.depth_stencil_view};
+        original_targets[index].ptr = static_cast<SIZE_T>(draw.render_target_views[index]);
+    D3D12_CPU_DESCRIPTOR_HANDLE original_depth {
+        static_cast<SIZE_T>(draw.depth_stencil_view)};
     commands->OMSetRenderTargets(draw.render_target_count,
         original_targets.data(), FALSE,
         draw.depth_stencil_view != 0 ? &original_depth : nullptr);

@@ -1,28 +1,56 @@
 @echo off
 setlocal EnableExtensions
 
-rem NeuralPass Windows x64 builder.
+rem NeuralPass Windows x64/x86 builder.
 rem Usage:
-rem   build_windows.cmd              Build DirectML version with Candy model
-rem   build_windows.cmd directml all Build DirectML version with all art models
-rem   build_windows.cmd preview      Build without ONNX Runtime
+rem   build_windows.cmd                       Build x64 DirectML with Candy
+rem   build_windows.cmd directml all x64      Build x64 DirectML with all models
+rem   build_windows.cmd preview x86           Build 32-bit preview backend
 
 cd /d "%~dp0"
 set "NP_ROOT=%CD%"
 set "NP_MODE=%~1"
 set "NP_MODELS=%~2"
+set "NP_ARCH=%~3"
 if not defined NP_MODE set "NP_MODE=directml"
 if not defined NP_DIRECTML_TEST set "NP_DIRECTML_TEST=ON"
+if /I "%NP_MODELS%"=="x86" (
+    set "NP_ARCH=x86"
+    set "NP_MODELS="
+)
+if /I "%NP_MODELS%"=="x64" (
+    set "NP_ARCH=x64"
+    set "NP_MODELS="
+)
+if not defined NP_ARCH set "NP_ARCH=x64"
 
 if /I not "%NP_MODE%"=="directml" if /I not "%NP_MODE%"=="preview" (
     echo ERROR: First argument must be directml or preview.
-    echo Usage: build_windows.cmd [directml^|preview] [all]
+    echo Usage: build_windows.cmd [directml^|preview] [all] [x64^|x86]
     exit /b 2
+)
+if /I not "%NP_ARCH%"=="x64" if /I not "%NP_ARCH%"=="x86" (
+    echo ERROR: Architecture must be x64 or x86.
+    exit /b 2
+)
+if /I "%NP_MODE%"=="directml" if /I "%NP_ARCH%"=="x86" (
+    echo ERROR: Microsoft.ML.OnnxRuntime.DirectML 1.24.4 has no Win32 runtime.
+    echo        Use "build_windows.cmd preview x86" for the tested 32-bit package.
+    exit /b 2
+)
+if /I "%NP_ARCH%"=="x86" (
+    set "NP_CMAKE_ARCH=Win32"
+    set "NP_ADDON=NeuralPass.addon32"
+    set "NP_PACKAGE_ARCH=windows-x86"
+) else (
+    set "NP_CMAKE_ARCH=x64"
+    set "NP_ADDON=NeuralPass.addon64"
+    set "NP_PACKAGE_ARCH=windows-x64"
 )
 
 echo.
 echo ============================================================
-echo  NeuralPass Windows builder - %NP_MODE%
+echo  NeuralPass Windows builder - %NP_MODE% %NP_ARCH%
 echo ============================================================
 echo.
 
@@ -32,37 +60,43 @@ call :prepare_sdk || exit /b 1
 if /I "%NP_MODE%"=="directml" (
     call :prepare_directml || exit /b 1
     call :prepare_models || exit /b 1
-    set "NP_BUILD=%NP_ROOT%\build-windows-directml"
+    set "NP_BUILD=%NP_ROOT%\build-windows-directml-%NP_ARCH%"
 ) else (
-    set "NP_BUILD=%NP_ROOT%\build-windows-preview"
+    set "NP_BUILD=%NP_ROOT%\build-windows-preview-%NP_ARCH%"
 )
 
 echo [4/6] Configuring CMake...
 if /I "%NP_MODE%"=="directml" (
-    cmake -S "%NP_ROOT%" -B "%NP_BUILD%" -A x64 ^
+    cmake -S "%NP_ROOT%" -B "%NP_BUILD%" -A %NP_CMAKE_ARCH% ^
       -DNEURALPASS_BUILD_ADDON=ON ^
       -DNEURALPASS_BUILD_TESTS=ON ^
+      -DCMAKE_SUPPRESS_REGENERATION=ON ^
       -DNEURALPASS_TEST_DIRECTML=%NP_DIRECTML_TEST% ^
       -DRESHADE_SDK_DIR="%NP_ROOT%\external\reshade" ^
       -DONNXRUNTIME_ROOT="%NP_ROOT%\external\onnxruntime"
 ) else (
-    cmake -S "%NP_ROOT%" -B "%NP_BUILD%" -A x64 ^
+    cmake -S "%NP_ROOT%" -B "%NP_BUILD%" -A %NP_CMAKE_ARCH% ^
       -DNEURALPASS_BUILD_ADDON=ON ^
       -DNEURALPASS_BUILD_TESTS=ON ^
+      -DCMAKE_SUPPRESS_REGENERATION=ON ^
       -DNEURALPASS_TEST_DIRECTML=OFF ^
       -DRESHADE_SDK_DIR="%NP_ROOT%\external\reshade" ^
       -DONNXRUNTIME_ROOT=
 )
 if errorlevel 1 goto :failed
 
-echo [5/6] Building Release x64 and running tests...
+echo [5/6] Building Release %NP_ARCH% and running tests...
 cmake --build "%NP_BUILD%" --config Release --parallel
 if errorlevel 1 goto :failed
 ctest --test-dir "%NP_BUILD%" -C Release --output-on-failure
 if errorlevel 1 goto :failed
 
 echo [6/6] Assembling deployment folder...
-set "NP_DIST=%NP_ROOT%\dist\NeuralPass"
+if /I "%NP_ARCH%"=="x64" (
+    set "NP_DIST=%NP_ROOT%\dist\NeuralPass"
+) else (
+    set "NP_DIST=%NP_ROOT%\dist\NeuralPass-x86"
+)
 if exist "%NP_DIST%" rmdir /S /Q "%NP_DIST%"
 if errorlevel 1 (
     echo ERROR: Could not clean the deployment folder. Close programs using it and retry.
@@ -71,7 +105,7 @@ if errorlevel 1 (
 if not exist "%NP_DIST%" mkdir "%NP_DIST%"
 if not exist "%NP_DIST%\reshade-shaders\Shaders" mkdir "%NP_DIST%\reshade-shaders\Shaders"
 
-copy /Y "%NP_BUILD%\Release\NeuralPass.addon64" "%NP_DIST%\NeuralPass.addon64" >nul
+copy /Y "%NP_BUILD%\Release\%NP_ADDON%" "%NP_DIST%\%NP_ADDON%" >nul
 if errorlevel 1 (
     echo ERROR: The expected add-on was not produced.
     goto :failed
@@ -104,7 +138,7 @@ if /I "%NP_MODE%"=="directml" (
 )
 
 %NP_PY% "%NP_ROOT%\tools\write_package_metadata.py" ^
-  --package "%NP_DIST%" --mode "%NP_MODE%" --version "0.1.0-preview"
+  --package "%NP_DIST%" --mode "%NP_MODE%" --architecture "%NP_PACKAGE_ARCH%" --version "0.1.0-preview"
 if errorlevel 1 goto :failed
 %NP_PY% "%NP_ROOT%\tools\validate_package.py" "%NP_DIST%"
 if errorlevel 1 goto :failed
@@ -147,7 +181,7 @@ if not defined NP_VSINSTALL (
     echo ERROR: Visual Studio C++ tools were not found.
     exit /b 1
 )
-call "%NP_VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+call "%NP_VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=%NP_ARCH% -host_arch=x64 >nul
 if errorlevel 1 (
     echo ERROR: Visual Studio developer environment initialization failed.
     exit /b 1

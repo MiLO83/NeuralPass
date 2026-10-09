@@ -142,8 +142,13 @@ if(NEURALPASS_BUILD_ADDON)
     else()
         message(WARNING "ONNXRUNTIME_ROOT not set: add-on will use the clearly-labelled preview backend")
     endif()
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(NEURALPASS_ADDON_SUFFIX ".addon64")
+    else()
+        set(NEURALPASS_ADDON_SUFFIX ".addon32")
+    endif()
     set_target_properties(NeuralPassAddon PROPERTIES
         PREFIX ""
         OUTPUT_NAME "NeuralPass"
-        SUFFIX ".addon64")
+        SUFFIX "${NEURALPASS_ADDON_SUFFIX}")
 endif()

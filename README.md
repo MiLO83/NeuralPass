@@ -44,7 +44,7 @@ path; driver/game validation remains.
 
 ## Build
 
-Requirements for the add-on are Windows 10/11 x64, Visual Studio 2022, CMake,
+Requirements for the add-on are Windows 10/11, Visual Studio 2022, CMake,
 a ReShade source checkout, and optionally the ONNX Runtime DirectML native
 package.
 
@@ -63,10 +63,14 @@ fetches the checksum-verified Candy model, builds/tests Release x64, and creates
 ```bat
 build_windows.cmd directml all
 build_windows.cmd preview
+build_windows.cmd preview x86
 ```
 
 The first downloads every bundled art model. The second omits ONNX Runtime and
-builds the temporal pipeline with its clearly-labelled preview backend.
+builds the x64 temporal pipeline with its clearly-labelled preview backend. The
+third builds/tests a Win32 add-on and creates `dist\NeuralPass-x86`. Microsoft's
+current ONNX Runtime DirectML package has no Win32 runtime, so x86 intentionally
+uses the preview backend rather than mixing architectures.
 
 ### Manual build
 
@@ -108,7 +112,8 @@ uninstallation and a diagnostics report generator.
 
 For a manual installation:
 
-1. Copy `NeuralPass.addon64` beside the game's ReShade DLL.
+1. Copy the architecture-matched `NeuralPass.addon64` or `NeuralPass.addon32`
+   beside the game's ReShade DLL.
 2. Copy `reshade-shaders/Shaders/NeuralPass.fx` into the corresponding game folder.
 3. Copy `models/downloads` beside the add-on, preserving that directory name.
 4. Choose a preset in the NeuralPass add-on overlay. `NEURALPASS_PRESET` can

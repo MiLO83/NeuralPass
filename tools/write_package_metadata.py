@@ -29,6 +29,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--package", required=True, type=Path)
     parser.add_argument("--mode", required=True, choices=("preview", "directml"))
+    parser.add_argument("--architecture", required=True, choices=("windows-x64", "windows-x86"))
     parser.add_argument("--version", required=True)
     args = parser.parse_args()
     root = args.package.resolve()
@@ -40,7 +41,7 @@ def main() -> int:
         "name": "NeuralPass",
         "version": args.version,
         "mode": args.mode,
-        "architecture": "windows-x64",
+        "architecture": args.architecture,
         "created_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "signed": False,
         "support_tier": "research-preview",

@@ -23,7 +23,7 @@ Get-CimInstance Win32_VideoController | ForEach-Object {
 Add-Line ''
 Add-Line 'Relevant files:'
 $names = @(
-    'NeuralPass.addon64', 'ReShade.ini', 'ReShade.log', 'dxgi.dll', 'd3d9.dll',
+    'NeuralPass.addon64', 'NeuralPass.addon32', 'ReShade.ini', 'ReShade.log', 'dxgi.dll', 'd3d9.dll',
     'd3d10.dll', 'd3d11.dll', 'd3d12.dll', 'opengl32.dll', 'onnxruntime.dll',
     'onnxruntime_providers_shared.dll', 'DirectML.dll', 'NeuralPass.install.json',
     'NeuralPass/PACKAGE.json', 'NeuralPass/SHA256SUMS.txt'

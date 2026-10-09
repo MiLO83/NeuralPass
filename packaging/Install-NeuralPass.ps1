@@ -3,6 +3,12 @@ param([Parameter(Position = 0)][string]$TargetPath)
 
 $ErrorActionPreference = 'Stop'
 $package = Split-Path -Parent $MyInvocation.MyCommand.Path
+$packageMetadata = Get-Content -LiteralPath (Join-Path $package 'PACKAGE.json') -Raw | ConvertFrom-Json
+$addonName = switch ($packageMetadata.architecture) {
+    'windows-x64' { 'NeuralPass.addon64' }
+    'windows-x86' { 'NeuralPass.addon32' }
+    default { throw "Unsupported package architecture: $($packageMetadata.architecture)" }
+}
 
 function Resolve-GameDirectory([string]$Value) {
     if ([string]::IsNullOrWhiteSpace($Value)) {
@@ -43,7 +49,7 @@ if ((Read-Host 'Type INSTALL to activate NeuralPass for this game') -cne 'INSTAL
 }
 
 $entries = @(
-    @{ Source = 'NeuralPass.addon64'; Destination = 'NeuralPass.addon64' },
+    @{ Source = $addonName; Destination = $addonName },
     @{ Source = 'reshade-shaders/Shaders/NeuralPass.fx'; Destination = 'reshade-shaders/Shaders/NeuralPass.fx' },
     @{ Source = 'README.md'; Destination = 'NeuralPass/README.md' },
     @{ Source = 'LICENSE.txt'; Destination = 'NeuralPass/LICENSE.txt' },

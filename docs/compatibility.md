@@ -7,7 +7,8 @@ full add-on build of ReShade. It is not suitable for protected multiplayer games
 
 | Area | Current status |
 | --- | --- |
-| Windows / x64 | Automated build/package plus native D3D9 and D3D10/D3D11/D3D12 WARP tests |
+| Windows / x64 | Automated DirectML build/package plus native D3D9 and D3D10/D3D11/D3D12 tests |
+| Windows / x86 | Automated preview build/package; 32-bit D3D9/10/11/12 native suites pass |
 | D3D9 | Experimental SM3 direct/indexed capture; synchronous readback, no fragment depth, lockable 32-bit replacement only |
 | D3D10 | Experimental direct/indexed geometry capture and RGBA8/BGRA8 replacement |
 | D3D11 | Experimental geometry capture and RGBA8/BGRA8 replacement |
@@ -17,7 +18,7 @@ full add-on build of ReShade. It is not suitable for protected multiplayer games
 | HDR / scRGB | Experimental FP16 scRGB and RGB10A2 HDR10/PQ paths with declared-color-space validation and luminance-preserving composition; monitor/game validation pending |
 | DirectML | Model execution smoke-tested on NVIDIA; AMD and Intel hardware validation remains |
 | CUDA | Legacy Python bridge only; not part of the managed package |
-| x86 games | Not packaged or validated |
+| x86 games | Experimental `addon32` preview package; DirectML unavailable because the pinned ONNX Runtime package has no Win32 runtime; real-game validation pending |
 
 Unsupported capture paths fall back to the screen-space compositor. They do not
 guess mesh UVs or write guessed data into persistent material atlases.
@@ -63,10 +64,11 @@ user tokens, registry dumps, process lists, and arbitrary files.
 
 ## Troubleshooting order
 
-1. Confirm the game is x64 D3D9/D3D10/D3D11 (or an explicitly tested D3D12/Vulkan title) and running
+1. Confirm the game uses a packaged architecture and supported graphics API, and is running
    without anti-cheat or protected multiplayer.
 2. Confirm ReShade itself opens and its Add-ons tab lists NeuralPass.
-3. Confirm `NeuralPass.addon64` is beside the active ReShade proxy DLL.
+3. Confirm the architecture-matched `NeuralPass.addon64` or
+   `NeuralPass.addon32` is beside the active ReShade proxy DLL.
 4. Confirm `reshade-shaders/Shaders/NeuralPass.fx` exists and compiles in ReShade.
 5. Keep **NeuralPass (keep last)** last in technique order.
 6. For a DirectML package, confirm `onnxruntime.dll`,

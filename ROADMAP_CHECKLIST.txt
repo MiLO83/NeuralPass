@@ -185,8 +185,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 6. INSTALLER, SAFETY, AND DOCUMENTATION
 ---------------------------------------
 [~] Build x86/x64 installer, updater, diagnostics, model manager, and uninstaller.
-    Evidence: manifest-scoped x64 preview installer/uninstaller and diagnostics pass
-    an isolated lifecycle test; x86, updater, and model-manager work remains.
+    Evidence: architecture-aware manifest-scoped x64 and x86 packages, installer,
+    uninstaller, and diagnostics are built and checksum-validated; the Win32 add-on
+    and D3D9/10/11/12 suites pass. Updater and model-manager work remains.
 [~] Detect target API, ReShade support, GPU provider, HDR mode, and worker health.
     Evidence: installer requires a graphics proxy and diagnostics report proxy files,
     GPU/driver data, package hashes, safety markers, and ReShade logs; HDR and live
@@ -237,9 +238,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [ ] Each API completes a 60-minute soak without crash or device removal.
 [ ] Clean-machine install, update, removal, and signature verification pass.
 [~] GitHub Windows/Linux x86/x64 CI is green.
-    Evidence: Linux validates the portable core; Windows builds the real x64 ReShade
-    DirectML add-on, executes ONNX CPU model inference plus core and D3D11 WARP tests,
-    validates packaging, and uploads it. DirectML execution passes on the development
-    NVIDIA GPU; hosted runners have no valid adapter. x86 and other adapters remain.
+    Evidence: Linux validates the portable core; Windows builds/tests/packages the
+    x64 DirectML and x86 preview ReShade add-ons, including native D3D9/10/11/12
+    suites, and uploads both. DirectML execution passes on the development NVIDIA
+    GPU; hosted runners have no valid adapter. AMD/Intel and game evidence remain.
 [ ] No open severity-1 or severity-2 defects.
 [ ] Signed v1.0 release published.

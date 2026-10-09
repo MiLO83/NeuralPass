@@ -10,7 +10,6 @@ from pathlib import Path
 
 
 REQUIRED = {
-    "NeuralPass.addon64",
     "reshade-shaders/Shaders/NeuralPass.fx",
     "README.md",
     "LICENSE.txt",
@@ -43,6 +42,13 @@ def main() -> int:
     metadata = json.loads((root / "PACKAGE.json").read_text(encoding="utf-8"))
     if metadata.get("format") != 1 or metadata.get("name") != "NeuralPass":
         raise SystemExit("invalid PACKAGE.json identity or format")
+    architecture = metadata.get("architecture")
+    addon = {"windows-x64": "NeuralPass.addon64",
+             "windows-x86": "NeuralPass.addon32"}.get(architecture)
+    if addon is None:
+        raise SystemExit(f"unknown package architecture: {architecture}")
+    if not (root / addon).is_file():
+        raise SystemExit(f"package is missing architecture-matched add-on: {addon}")
     expected: dict[str, str] = {}
     for line in (root / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines():
         checksum, marker = line.split(" ", 1)
