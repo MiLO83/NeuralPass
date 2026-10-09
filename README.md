@@ -6,7 +6,7 @@ the scene, and sends only dirty or expired 256-pixel tiles through an inference
 backend. The final `.fx` pass blends completed tiles immediately before the
 framebuffer is presented.
 
-This repository currently contains a working v0.1 pipeline:
+This repository currently contains a working **research-preview** pipeline:
 
 - deterministic temporal rejection and dirty-tile scheduling;
 - progressive two-tile-per-update bootstrap with 32-pixel inference halos;
@@ -16,11 +16,18 @@ This repository currently contains a working v0.1 pipeline:
 - a bounded-residual Photo Detail trainer/exporter for local image corpora;
 - a clearly labelled CPU preview backend when ONNX Runtime or a model is absent;
 - a ReShade compositor with strength, validity debugging, and a manual HUD mask.
+- restart-stable pipeline-plus-descriptor binding keys and per-scene atlas namespaces;
+- reveal provenance, UV-gradient elliptical splatting, scene-cut quarantine, and
+  stale scene/request rejection.
 
-The generic v0.1 path uses framebuffer color confidence. The core API already
-accepts depth and motion, but automatic game-resource discovery and canonical
-UVW/object-ID capture are future adapters; NeuralPass does not claim to recover
-those buffers generically.
+The evidence-backed implementation status is tracked in
+[`ROADMAP_CHECKLIST.txt`](ROADMAP_CHECKLIST.txt). An `[x]` requires a passing
+test or release artifact; `[~]` means the production path is still incomplete.
+
+The generic path uses framebuffer color confidence. The core accepts depth,
+motion, mesh UV gradients, binding identity, and visibility classes, but only
+the experimental D3D11 adapter currently supplies exact rasterized mesh UVs and
+gradients. NeuralPass does not claim generic geometry recovery on other APIs.
 
 ## Build
 
@@ -73,6 +80,10 @@ ctest --test-dir build --output-on-failure
 
 ## Install and run
 
+This is not a signed v1.0 release or a universal installer. Use it only with an
+offline game and a ReShade build with full add-on support. Do not inject it into
+anti-cheat or protected multiplayer software.
+
 1. Copy `NeuralPass.addon64` beside the game's ReShade DLL.
 2. Copy `shaders/NeuralPass.fx` into the game's `reshade-shaders/Shaders` folder.
 3. Copy `models/downloads` beside the add-on, preserving that directory name.
@@ -89,7 +100,7 @@ never queues an unbounded amount of work or blocks the game waiting for a tile.
 
 ## Prompt-driven live restyling
 
-The optional StreamDiffusion bridge performs semantic img2img restyling at
+The optional legacy StreamDiffusion bridge performs semantic img2img restyling at
 512x288 and sends completed frames back to the ReShade compositor. The default
 prompt is `Santa's North Pole Workshop`. A CUDA RIFE 4.9 pass inserts one motion
 compensated midpoint between generated frames when requested; it is disabled by
@@ -114,7 +125,10 @@ retaining the same screen flow -> {local UVW, world UVW} -> RGB contract.
 Adjust the additional temporal anchor with `--temporal-strength` (default
 `0.28`, maximum useful value `0.35`).
 
-Start the service in WSL before launching the game:
+The moved WSL environment in the original development machine currently lacks
+PyTorch and ONNX Runtime. The following command is valid only after those
+dependencies have been restored in `external/stream-venv`; it is not the final
+managed-worker experience:
 
 ```sh
 cd /home/topnotch/github/MiLO83/NeuralPass
@@ -133,19 +147,21 @@ that restores any prior prompt before it is applied again.
 ## Persistent material texture baker
 
 The platform-neutral baker core accepts visible screen-pixel correspondences of
-`{screen XY, material ID, texture UV, confidence}`. It bilinearly splats the
-restyled framebuffer into a persistent per-material atlas, retains an observed
-coverage mask, fills only unseen texels in texture space, and reconstructs the
-visible framebuffer by sampling that same atlas. This keeps the wrapped mesh
-view and the unwrapped texture representation consistent.
+`{screen XY, binding ID, texture UV, UV gradients, depth, confidence}`. It uses
+a bounded confidence-weighted elliptical footprint when gradients exist and a
+bilinear fallback otherwise. Atlases distinguish unseen source, generated
+inpaint, and direct observations; a later direct observation may replace an
+inpainted texel. Source alpha is retained. Uncovered pixels always keep the live
+framebuffer rather than sampling a debug sentinel.
 
 The ReShade add-on has an experimental D3D11 surface adapter. It reflects the
-vertex shader's rasterized `TEXCOORD`, executes the game's draw once, replays it
-with a capture pixel shader into `RGBA32_UINT`, and asynchronously decodes
-`{material ID low/high, U bits, V bits}` through a three-slot staging ring. A
-Windows WARP integration test renders a real triangle and verifies its decoded
-64-bit material ID and interpolated UV. Capture frames and framebuffer frames
-are paired by GPU sequence number before reveal-only atlas generation.
+vertex shader's rasterized `TEXCOORD`, executes the game's draw once, then
+replays it into an `RGBA32_UINT` identity/UV target and an `RGBA32_FLOAT`
+gradient target. A three-slot staging ring asynchronously decodes the 64-bit
+pipeline-plus-descriptor binding ID, exact UV, and `ddx`/`ddy` footprint. A
+Windows WARP test covers indexed and non-indexed replay, derivative capture,
+and state restoration. Capture frames and framebuffer frames are paired by GPU
+sequence number before reveal-only atlas generation.
 
 D3D9/10, D3D12, and Vulkan still require equivalent adapters, and the D3D11
 path needs broad real-game compatibility testing. Unsupported APIs, shader
@@ -166,6 +182,9 @@ new generation and rename it only after the complete payload is flushed, so an
 interrupted save cannot damage the preceding generation. Only material IDs
 backed by shader bytecode and texture content fingerprints are eligible for a
 cross-launch snapshot; handle-only identities deliberately remain session-local.
+Checksummed scene manifests accumulate restart-stable bindings from multiple
+views. Confirmed scene changes switch namespaces; returning views match and
+reload the prior namespace by binding overlap.
 
 `tools/prompt_restyle.py` is the slower SDXL-Lightning quality reference for a
 single screenshot. `tools/stream_restyle.py` benchmarks the persistent live

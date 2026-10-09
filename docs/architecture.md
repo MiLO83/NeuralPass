@@ -42,11 +42,13 @@ coverage byte per texel: 0 is unseen, 1 is synthetic UV-space inpaint, and 2 is
 an observed restyled framebuffer sample.  The coverage byte, rather than the
 filtered or compressed RGB value, determines whether a texel may be painted.
 
-Each correspondence contains screen position, stable material ID, mesh UV,
-linear framebuffer depth, and ray-hit depth.  Samples are accepted only when
-the depths agree.  An observed texel is immutable; an inpainted texel may be
-replaced later by a real observation.  Scene cuts clear screen-space temporal
-history but never discard persistent material atlases.
+Each correspondence contains screen position, stable binding ID, mesh UV and
+screen gradients, linear framebuffer depth, ray-hit depth, and confidence.
+Samples are accepted only when the depths agree. Gradient-bearing samples use
+a bounded elliptical footprint; adapters without gradients use a bilinear
+fallback. An observed texel is immutable; an inpainted texel may be replaced
+later by a real observation. Camera cuts clear screen-space history but retain
+the current scene atlas; confirmed new scenes switch to an isolated namespace.
 
 `MaterialTextureBaker` owns the scene's lazily-created atlas set. Capture
 adapters submit only trustworthy sparse correspondences; missing materials,
@@ -97,9 +99,10 @@ those keys are never admitted to the cross-launch atlas store.
 The first live adapter uses draw replay rather than modifying the game's pixel
 shader. D3D reflection selects a floating-point `TEXCOORD` from the vertex
 shader's output signature. NeuralPass executes the original draw exactly once,
-then temporarily binds a capture pixel shader and an `RGBA32_UINT` target while
-retaining vertex state, resources, viewport, rasterization, and depth. The
-capture shader stores the 64-bit material key and bit-exact interpolated UV.
+then temporarily binds a capture pixel shader, an `RGBA32_UINT` identity/UV
+target, and an `RGBA32_FLOAT` derivative target while retaining vertex state,
+resources, viewport, rasterization, and depth. The capture shader stores the
+64-bit binding key, bit-exact interpolated UV, and screen-space UV derivatives.
 Blend, depth/stencil, render targets, UAVs, and the original pixel shader are
 restored before control returns to the game.
 
@@ -131,10 +134,11 @@ that mask plus a context halo. `commit` accepts pixels only from the original
 reveal mask, so ordinary camera motion never restyles established material
 texels and unsupported pixels remain on the live screen-space fallback.
 
-Every asynchronous plan carries a baker epoch. An image-space camera cut bumps
-the epoch immediately, resets optical-flow/temporal history, and rejects older
-in-flight results while retaining material atlases. Material-ID overlap then
-classifies the transition with hysteresis: shared identities mean a camera cut;
-several consecutive frames containing only foreign identities confirm a true
-scene change and reset the active atlas cache. If geometry capture is missing,
-the conservative behavior is to reset screen history but preserve textures.
+Every asynchronous plan carries both a baker epoch and scene key. An image-space
+cut bumps the epoch immediately, resets optical-flow/temporal history, and
+rejects older in-flight results. Binding overlap then classifies the transition
+with hysteresis: shared identities mean a camera cut; foreign identities enter
+quarantine and may not read or mutate either scene. Several confirming frames
+switch to a checksummed persistent scene namespace. If geometry capture is
+missing, the conservative behavior is to reset screen history and preserve the
+current texture namespace.

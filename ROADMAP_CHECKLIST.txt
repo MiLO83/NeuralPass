@@ -114,7 +114,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [ ] Produce reproducible artifacts, checksums, SBOM, and provenance.
 [!] Obtain public-trust Authenticode signing.
     Blocker: SignPath Foundation approval or Microsoft Artifact Signing identity setup.
-[ ] Publish complete installation, troubleshooting, architecture, and compatibility docs.
+[~] Publish complete installation, troubleshooting, architecture, and compatibility docs.
+    Evidence: README and architecture document current preview install, scene/binding,
+    EWA, provenance, and limitations; installer troubleshooting/compatibility remain.
 [ ] Publish signed GitHub releases and documentation site.
 
 7. ACCEPTANCE AND RELEASE
