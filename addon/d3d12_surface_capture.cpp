@@ -38,7 +38,6 @@ struct PipelineTemplate {
     ShaderBlob geometry;
     std::vector<reshade::api::input_element> input;
     std::vector<std::string> semantics;
-    reshade::api::stream_output_desc stream_output {};
     reshade::api::blend_desc blend {};
     reshade::api::rasterizer_desc rasterizer {};
     reshade::api::depth_stencil_desc depth_stencil {};
@@ -48,8 +47,8 @@ struct PipelineTemplate {
     std::uint32_t render_target_count = 0;
     std::uint32_t sample_mask = UINT32_MAX;
     std::uint32_t sample_count = 1;
+    std::vector<reshade::api::dynamic_state> dynamic_states;
     bool has_vertex = false;
-    bool has_stream_output = false;
 };
 
 struct PipelineKey {
@@ -261,7 +260,7 @@ struct SurfaceCapture::Impl {
         const auto known = pipelines.find(source_pipeline);
         if (known == pipelines.end() || api_device == nullptr || uv.name.empty()) return {};
         const auto &source = known->second;
-        if (!source.has_vertex || source.has_stream_output || source.sample_count != 1) return {};
+        if (!source.has_vertex || source.sample_count != 1) return {};
         if (!std::all_of(uv.name.begin(), uv.name.end(), [](unsigned char value) {
                 return std::isalnum(value) != 0 || value == '_';
             })) return {};
@@ -341,6 +340,10 @@ struct SurfaceCapture::Impl {
                            const_cast<std::uint32_t *>(&source.sample_mask)});
         objects.push_back({reshade::api::pipeline_subobject_type::sample_count, 1,
                            const_cast<std::uint32_t *>(&sample_count)});
+        if (!source.dynamic_states.empty())
+            objects.push_back({reshade::api::pipeline_subobject_type::dynamic_pipeline_states,
+                static_cast<std::uint32_t>(source.dynamic_states.size()),
+                const_cast<reshade::api::dynamic_state *>(source.dynamic_states.data())});
         reshade::api::pipeline result = {};
         const bool created = api_device->create_pipeline(source.layout,
             static_cast<std::uint32_t>(objects.size()), objects.data(), &result);
@@ -475,7 +478,7 @@ void SurfaceCapture::register_pipeline(reshade::api::pipeline_layout layout,
             break;
         case reshade::api::pipeline_subobject_type::input_layout: {
             const auto *input = static_cast<const reshade::api::input_element *>(object.data);
-            result.input.assign(input, input + object.count);
+            if (object.count != 0) result.input.assign(input, input + object.count);
             result.semantics.reserve(object.count);
             for (std::uint32_t element = 0; element < object.count; ++element)
                 result.semantics.emplace_back(input[element].semantic != nullptr ? input[element].semantic : "");
@@ -485,7 +488,8 @@ void SurfaceCapture::register_pipeline(reshade::api::pipeline_layout layout,
             break;
         }
         case reshade::api::pipeline_subobject_type::stream_output_state:
-            result.has_stream_output = true;
+            // Deliberately omit stream output from the companion PSO: replaying
+            // application SO writes would duplicate side effects.
             break;
         case reshade::api::pipeline_subobject_type::blend_state:
             result.blend = *static_cast<const reshade::api::blend_desc *>(object.data);
@@ -513,6 +517,13 @@ void SurfaceCapture::register_pipeline(reshade::api::pipeline_layout layout,
         case reshade::api::pipeline_subobject_type::sample_count:
             result.sample_count = *static_cast<const std::uint32_t *>(object.data);
             break;
+        case reshade::api::pipeline_subobject_type::dynamic_pipeline_states: {
+            if (object.count != 0) {
+                const auto *states = static_cast<const reshade::api::dynamic_state *>(object.data);
+                result.dynamic_states.assign(states, states + object.count);
+            }
+            break;
+        }
         default:
             break;
         }
