@@ -1816,17 +1816,24 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
     }
     std::uint64_t replayed_draws = 0;
     std::uint64_t capture_drops = 0;
+    std::uint64_t replacement_draws = 0;
+    std::uint64_t rejected_replacements = 0;
     {
         std::lock_guard lock(g_baker_probe_mutex);
         if (const auto found = g_d3d11_captures.find(runtime->get_device());
             found != g_d3d11_captures.end()) {
             replayed_draws = found->second->replayed_draws();
             capture_drops = found->second->dropped_frames();
+            replacement_draws = found->second->replacement_draws();
+            rejected_replacements = found->second->rejected_replacements();
         }
     }
     ImGui::Text("D3D11 UV replay draws: %llu  Readback drops: %llu",
         static_cast<unsigned long long>(replayed_draws),
         static_cast<unsigned long long>(capture_drops));
+    ImGui::Text("Replacement draws: %llu  Rejected source layouts: %llu",
+        static_cast<unsigned long long>(replacement_draws),
+        static_cast<unsigned long long>(rejected_replacements));
     ImGui::Text("Surface frames: %llu  Supported pixels: %llu",
         static_cast<unsigned long long>(g_surface_frames_captured.load()),
         static_cast<unsigned long long>(g_surface_pixels_captured.load()));

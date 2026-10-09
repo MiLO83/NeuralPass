@@ -217,11 +217,35 @@ void test_triangle_replay_produces_material_uv() {
         replacement.coverage[y * 4 + 0] = 0;
     }
     capture.queue_replacement(material_id, {std::move(replacement)});
+    D3D11_TEXTURE2D_DESC unsupported_desc = source_desc;
+    unsupported_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    unsupported_desc.Usage = D3D11_USAGE_DEFAULT;
+    ID3D11Texture2D *unsupported_texture = nullptr;
+    ID3D11ShaderResourceView *unsupported_view = nullptr;
+    require(SUCCEEDED(device->CreateTexture2D(&unsupported_desc, nullptr, &unsupported_texture)) &&
+            SUCCEEDED(device->CreateShaderResourceView(
+                unsupported_texture, nullptr, &unsupported_view)),
+        "could not create unsupported replacement fixture");
+    context->PSSetShaderResources(6, 1, &unsupported_view);
+    context->PSSetSamplers(6, 1, &source_sampler);
+    constexpr std::uint64_t unsupported_material_id = 0x1111222233334444ull;
+    neuralpass::d3d11_capture::ReplacementMip unsupported_replacement;
+    unsupported_replacement.width = unsupported_replacement.height = 4;
+    unsupported_replacement.rgba.resize(4 * 4 * 4);
+    unsupported_replacement.coverage.resize(4 * 4, 2);
+    capture.queue_replacement(unsupported_material_id, {std::move(unsupported_replacement)});
+    require(capture.draw(context, uv_semantic, unsupported_material_id, 0, 1, 0, 0, 6) &&
+            capture.draw(context, uv_semantic, unsupported_material_id, 0, 1, 0, 0, 6),
+        "unsupported replacement fixture draw was not handled");
+    require(capture.rejected_replacements() == 1,
+        "unsupported replacement circuit breaker retried the same source");
     require(capture.draw(context, uv_semantic, first_material_id, 3, 1, 0, 0),
         "capture adapter did not handle the triangle draw");
     require(capture.draw_indexed(context, uv_semantic, material_id, 3, 1, 0, 0, 0, 5),
         "capture adapter did not handle the indexed triangle draw");
-    require(capture.replayed_draws() == 2, "draw variants were not each replayed once");
+    require(capture.replayed_draws() == 4, "draw variants were not each replayed once");
+    require(capture.replacement_draws() == 1,
+        "replacement draw accounting did not report the substituted draw");
 
     ID3D11PixelShader *restored_pixel_shader = nullptr;
     context->PSGetShader(&restored_pixel_shader, nullptr, nullptr);
@@ -312,6 +336,8 @@ void test_triangle_replay_produces_material_uv() {
 
     capture.reset();
     release(target_staging);
+    release(unsupported_view);
+    release(unsupported_texture);
     release(override_view);
     release(override_texture);
     release(source_sampler);

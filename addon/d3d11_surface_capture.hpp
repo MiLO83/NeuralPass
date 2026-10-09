@@ -67,6 +67,8 @@ public:
 
     [[nodiscard]] std::uint64_t replayed_draws() const noexcept;
     [[nodiscard]] std::uint64_t dropped_frames() const noexcept;
+    [[nodiscard]] std::uint64_t replacement_draws() const noexcept;
+    [[nodiscard]] std::uint64_t rejected_replacements() const noexcept;
     [[nodiscard]] std::uint32_t width() const noexcept;
     [[nodiscard]] std::uint32_t height() const noexcept;
     void queue_replacement(std::uint64_t material_id,

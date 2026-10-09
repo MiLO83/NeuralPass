@@ -63,6 +63,7 @@ struct ReadbackSlot {
 
 struct ReplacementTexture {
     ID3D11Resource *source = nullptr;
+    ID3D11Resource *rejected_source = nullptr;
     ID3D11Texture2D *texture = nullptr;
     ID3D11ShaderResourceView *view = nullptr;
     std::vector<ReplacementMip> mips;
@@ -180,6 +181,8 @@ struct SurfaceCapture::Impl {
     std::uint64_t next_frame_index = 1;
     std::uint64_t replayed_draws = 0;
     std::uint64_t dropped_frames = 0;
+    std::uint64_t replacement_draws = 0;
+    std::uint64_t rejected_replacements = 0;
     bool target_cleared = false;
 
     ID3D11ShaderResourceView *replacement(
@@ -199,6 +202,11 @@ struct SurfaceCapture::Impl {
             release(source_resource);
             return nullptr;
         }
+        if (entry.rejected_source == source_resource) {
+            release(source_texture);
+            release(source_resource);
+            return nullptr;
+        }
         D3D11_TEXTURE2D_DESC desc {};
         source_texture->GetDesc(&desc);
         D3D11_SHADER_RESOURCE_VIEW_DESC view_desc {};
@@ -209,6 +217,10 @@ struct SurfaceCapture::Impl {
             view_desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
         if (!byte_color || desc.SampleDesc.Count != 1 || desc.ArraySize != 1 ||
             view_desc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D) {
+            release(entry.rejected_source);
+            entry.rejected_source = source_resource;
+            entry.rejected_source->AddRef();
+            ++rejected_replacements;
             release(source_texture);
             release(source_resource);
             return nullptr;
@@ -217,6 +229,7 @@ struct SurfaceCapture::Impl {
             release(entry.view);
             release(entry.texture);
             release(entry.source);
+            release(entry.rejected_source);
             D3D11_TEXTURE2D_DESC replacement_desc = desc;
             replacement_desc.Usage = D3D11_USAGE_DEFAULT;
             replacement_desc.CPUAccessFlags = 0;
@@ -225,6 +238,9 @@ struct SurfaceCapture::Impl {
                 FAILED(device->CreateShaderResourceView(entry.texture, &view_desc, &entry.view))) {
                 release(entry.view);
                 release(entry.texture);
+                entry.rejected_source = source_resource;
+                entry.rejected_source->AddRef();
+                ++rejected_replacements;
                 release(source_texture);
                 release(source_resource);
                 return nullptr;
@@ -242,6 +258,10 @@ struct SurfaceCapture::Impl {
             patch_desc.MiscFlags = 0;
             ID3D11Texture2D *patch_texture = nullptr;
             if (FAILED(device->CreateTexture2D(&patch_desc, nullptr, &patch_texture))) {
+                release(entry.rejected_source);
+                entry.rejected_source = source_resource;
+                entry.rejected_source->AddRef();
+                ++rejected_replacements;
                 release(source_texture);
                 release(source_resource);
                 return nullptr;
@@ -469,6 +489,7 @@ struct SurfaceCapture::Impl {
         if (replacement_view != nullptr)
             context->PSSetShaderResources(static_cast<UINT>(source_binding.texture_slot), 1,
                                           &replacement_view);
+        if (replacement_view != nullptr) ++replacement_draws;
         // Execute the application's draw first. The callback returns true after
         // a successful replay so ReShade does not execute it a second time.
         draw();
@@ -537,6 +558,7 @@ struct SurfaceCapture::Impl {
             release(replacement.view);
             release(replacement.texture);
             release(replacement.source);
+            release(replacement.rejected_source);
         }
         for (auto &slot : readback) {
             release(slot.texture);
@@ -681,6 +703,14 @@ std::uint64_t SurfaceCapture::dropped_frames() const noexcept {
     return impl_ != nullptr ? impl_->dropped_frames : 0;
 }
 
+std::uint64_t SurfaceCapture::replacement_draws() const noexcept {
+    return impl_ != nullptr ? impl_->replacement_draws : 0;
+}
+
+std::uint64_t SurfaceCapture::rejected_replacements() const noexcept {
+    return impl_ != nullptr ? impl_->rejected_replacements : 0;
+}
+
 std::uint32_t SurfaceCapture::width() const noexcept {
     return impl_ != nullptr ? impl_->width : 0;
 }
@@ -693,6 +723,7 @@ void SurfaceCapture::queue_replacement(
     std::uint64_t material_id, std::vector<ReplacementMip> mips) {
     if (impl_ == nullptr || material_id == 0 || mips.empty()) return;
     auto &entry = impl_->replacements[material_id];
+    release(entry.rejected_source);
     entry.mips = std::move(mips);
     entry.dirty = true;
 }
@@ -704,6 +735,7 @@ void SurfaceCapture::clear_replacements() {
         release(replacement.view);
         release(replacement.texture);
         release(replacement.source);
+        release(replacement.rejected_source);
     }
     impl_->replacements.clear();
 }
