@@ -86,6 +86,9 @@ This is not a signed v1.0 release or a universal installer. Use it only with an
 offline game and a ReShade build with full add-on support. Do not inject it into
 anti-cheat or protected multiplayer software.
 
+Download the [Windows x64 DirectML preview package](https://github.com/MiLO83/NeuralPass/releases/download/v0.1.0-preview/NeuralPass-v0.1.0-preview-windows-x64-directml.zip),
+then extract it to a separate directory.
+
 For an assembled Windows package, run `Install NeuralPass.cmd` and give it the
 game executable or directory. It refuses known anti-cheat markers, checks for a
 graphics proxy, displays the unsigned-preview warning, and requires you to type
