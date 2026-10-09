@@ -1,5 +1,7 @@
 # NeuralPass
 
+[![CI](https://github.com/MiLO83/NeuralPass/actions/workflows/ci.yml/badge.svg)](https://github.com/MiLO83/NeuralPass/actions/workflows/ci.yml)
+
 NeuralPass is a persistent sparse neural post-process for ReShade. It keeps a
 styled framebuffer alive across frames, rejects history that no longer matches
 the scene, and sends only dirty or expired 256-pixel tiles through an inference
@@ -15,7 +17,7 @@ This repository currently contains a working **research-preview** pipeline:
 - checksum-pinned Candy, Mosaic, Rain Princess, and Udnie model downloads;
 - a bounded-residual Photo Detail trainer/exporter for local image corpora;
 - a clearly labelled CPU preview backend when ONNX Runtime or a model is absent;
-- a ReShade compositor with strength, validity debugging, and a manual HUD mask.
+- a ReShade compositor with strength, validity debugging, and a manual HUD mask;
 - restart-stable pipeline-plus-descriptor binding keys and per-scene atlas namespaces;
 - reveal provenance, UV-gradient elliptical splatting, scene-cut quarantine, and
   stale scene/request rejection.
