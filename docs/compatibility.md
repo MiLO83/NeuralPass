@@ -14,13 +14,19 @@ full add-on build of ReShade. It is not suitable for protected multiplayer games
 | D3D12 | Experimental PSO replay, source sampling, bounded-table RGBA8/BGRA8 replacement, barriers, and fence/readback ring; real-game evidence pending |
 | Vulkan | Experimental SPIR-V UV/source capture and transfer-source RGBA8/BGRA8 bounded-table replacement; no driver/game evidence |
 | SDR RGBA8 | Supported preview path |
-| HDR / scRGB | Not supported correctly; leave NeuralPass disabled |
+| HDR / scRGB | Experimental FP16 scRGB and RGB10A2 HDR10/PQ paths with declared-color-space validation and luminance-preserving composition; monitor/game validation pending |
 | DirectML | Model execution smoke-tested on NVIDIA; AMD and Intel hardware validation remains |
 | CUDA | Legacy Python bridge only; not part of the managed package |
 | x86 games | Not packaged or validated |
 
 Unsupported capture paths fall back to the screen-space compositor. They do not
 guess mesh UVs or write guessed data into persistent material atlases.
+
+HDR capture is enabled only when both pieces of evidence agree: FP16 with a
+declared scRGB swapchain, or RGB10A2 with declared HDR10/PQ. NeuralPass converts
+that signal to bounded sRGB before inference and converts the styled result back
+in the final shader. HLG, unknown color spaces, and mismatched format/color-space
+pairs are bypassed rather than treated as plausible HDR.
 
 ## Safe installation
 

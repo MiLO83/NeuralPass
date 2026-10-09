@@ -85,6 +85,22 @@ are deliberately not treated as mesh UVs. A graphics adapter must provide a
 stable material ID plus interpolated mesh UV and matching depth before a pixel
 is eligible for the persistent material baker.
 
+## Display color contract
+
+Backbuffer format is not used as a proxy for transfer function. Swapchain events
+record ReShade's declared color space, and capture starts only for a compatible
+pair: RGBA/BGRA8 with SDR/unknown, FP16 with linear scRGB, or RGB10A2 with
+HDR10/PQ. HLG and contradictory pairs remain bypassed.
+
+The CPU readback decoder converts scRGB and PQ/BT.2020 pixels into bounded sRGB
+for the existing inference backends. The final effect converts styled sRGB back
+to the proven output encoding. For HDR, it transfers styled chroma and relative
+contrast while scaling against the source scene luminance, preventing an SDR
+model result from collapsing highlights to SDR white. The portable reference
+implementation and shader share the same sRGB, ACES-fit, ST.2084, and gamut
+matrices; neutral identity round trips are covered by core tests. Actual HDR
+display/game validation is still required before promotion from experimental.
+
 ## Graphics API portability
 
 ```text

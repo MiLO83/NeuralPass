@@ -9,6 +9,7 @@
 #include "d3d12_surface_capture.hpp"
 #include "vulkan_surface_capture.hpp"
 #include "neuralpass/binding_identity.hpp"
+#include "neuralpass/color_pipeline.hpp"
 #include "neuralpass/inference.hpp"
 #include "neuralpass/scene_cache.hpp"
 #include "neuralpass/texture_baker.hpp"
@@ -111,6 +112,7 @@ std::unordered_map<std::uint64_t, int> g_source_slot_overrides;
 std::unordered_set<std::uint64_t> g_source_overrides_loaded;
 std::unordered_map<reshade::api::device *,
     std::unique_ptr<neuralpass::capture::SurfaceCaptureBackend>> g_surface_captures;
+std::unordered_map<void *, reshade::api::color_space> g_swapchain_color_spaces;
 
 constexpr char k_source_slot_section[] = "NeuralPass.SourceSlots";
 
@@ -1198,6 +1200,7 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::jthread worker;
     reshade::api::effect_texture_variable styled_variable = {};
     reshade::api::effect_texture_variable valid_variable = {};
+    reshade::api::effect_uniform_variable color_mode_variable = {};
     std::atomic_uint64_t submitted = 0;
     std::atomic_uint64_t completed = 0;
     std::atomic_uint64_t dropped = 0;
@@ -1233,7 +1236,11 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::uint32_t capture_width = 0;
     std::uint32_t capture_height = 0;
     reshade::api::format capture_format = reshade::api::format::unknown;
-    bool capture_bgra = false;
+    neuralpass::CapturePixelLayout capture_layout = neuralpass::CapturePixelLayout::rgba8;
+    neuralpass::DisplayEncoding capture_encoding = neuralpass::DisplayEncoding::sdr_srgb;
+    std::uint32_t capture_bytes_per_pixel = 4;
+    reshade::api::format rejected_format = reshade::api::format::unknown;
+    reshade::api::color_space rejected_color_space = reshade::api::color_space::unknown;
 };
 
 std::filesystem::path bridge_directory() {
@@ -1850,22 +1857,49 @@ void find_effect_variables(reshade::api::effect_runtime *runtime) {
     if (!state) return;
     state->styled_variable = runtime->find_texture_variable("NeuralPass.fx", "NeuralPassStyled");
     state->valid_variable = runtime->find_texture_variable("NeuralPass.fx", "NeuralPassValid");
+    state->color_mode_variable = runtime->find_uniform_variable(
+        "NeuralPass.fx", "NeuralPassColorMode");
 }
 
-bool supported_capture_format(reshade::api::format format, bool &bgra) {
+struct CaptureColorContract {
+    neuralpass::CapturePixelLayout layout;
+    neuralpass::DisplayEncoding encoding;
+    std::uint32_t bytes_per_pixel;
+};
+
+std::optional<CaptureColorContract> capture_color_contract(
+        reshade::api::format format, reshade::api::color_space color_space) {
     switch (format) {
     case reshade::api::format::r8g8b8a8_unorm:
     case reshade::api::format::r8g8b8a8_unorm_srgb:
     case reshade::api::format::r8g8b8x8_unorm:
     case reshade::api::format::r8g8b8x8_unorm_srgb:
-        bgra = false; return true;
+        if (color_space == reshade::api::color_space::unknown ||
+            color_space == reshade::api::color_space::srgb)
+            return CaptureColorContract {neuralpass::CapturePixelLayout::rgba8,
+                neuralpass::DisplayEncoding::sdr_srgb, 4};
+        return std::nullopt;
     case reshade::api::format::b8g8r8a8_unorm:
     case reshade::api::format::b8g8r8a8_unorm_srgb:
     case reshade::api::format::b8g8r8x8_unorm:
     case reshade::api::format::b8g8r8x8_unorm_srgb:
-        bgra = true; return true;
+        if (color_space == reshade::api::color_space::unknown ||
+            color_space == reshade::api::color_space::srgb)
+            return CaptureColorContract {neuralpass::CapturePixelLayout::bgra8,
+                neuralpass::DisplayEncoding::sdr_srgb, 4};
+        return std::nullopt;
+    case reshade::api::format::r16g16b16a16_float:
+        if (color_space == reshade::api::color_space::scrgb)
+            return CaptureColorContract {neuralpass::CapturePixelLayout::rgba16_float,
+                neuralpass::DisplayEncoding::scrgb_linear, 8};
+        return std::nullopt;
+    case reshade::api::format::r10g10b10a2_unorm:
+        if (color_space == reshade::api::color_space::hdr10_pq)
+            return CaptureColorContract {neuralpass::CapturePixelLayout::rgb10a2,
+                neuralpass::DisplayEncoding::hdr10_pq, 4};
+        return std::nullopt;
     default:
-        return false;
+        return std::nullopt;
     }
 }
 
@@ -1881,17 +1915,24 @@ void destroy_readback(reshade::api::effect_runtime *runtime, RuntimeState &state
 }
 
 bool ensure_readback(reshade::api::effect_runtime *runtime, RuntimeState &state,
-                     const reshade::api::resource_desc &source_desc) {
-    if (state.capture_width == source_desc.texture.width &&
-        state.capture_height == source_desc.texture.height &&
-        state.capture_format == source_desc.texture.format && state.readback[0] != 0)
-        return true;
-    bool bgra = false;
-    if (!supported_capture_format(source_desc.texture.format, bgra)) {
-        reshade::log::message(reshade::log::level::warning,
-            "NeuralPass bypassed an unsupported/HDR backbuffer format.");
+                     const reshade::api::resource_desc &source_desc,
+                     reshade::api::color_space color_space) {
+    const auto contract = capture_color_contract(source_desc.texture.format, color_space);
+    if (!contract) {
+        if (state.rejected_format != source_desc.texture.format ||
+            state.rejected_color_space != color_space) {
+            reshade::log::message(reshade::log::level::warning,
+                "NeuralPass bypassed a backbuffer whose format/color-space pair is unsupported.");
+            state.rejected_format = source_desc.texture.format;
+            state.rejected_color_space = color_space;
+        }
         return false;
     }
+    if (state.capture_width == source_desc.texture.width &&
+        state.capture_height == source_desc.texture.height &&
+        state.capture_format == source_desc.texture.format &&
+        state.capture_encoding == contract->encoding && state.readback[0] != 0)
+        return true;
     runtime->get_command_queue()->wait_idle();
     destroy_readback(runtime, state);
     auto desc = source_desc;
@@ -1911,8 +1952,29 @@ bool ensure_readback(reshade::api::effect_runtime *runtime, RuntimeState &state,
     state.capture_width = source_desc.texture.width;
     state.capture_height = source_desc.texture.height;
     state.capture_format = source_desc.texture.format;
-    state.capture_bgra = bgra;
+    state.capture_layout = contract->layout;
+    state.capture_encoding = contract->encoding;
+    state.capture_bytes_per_pixel = contract->bytes_per_pixel;
+    state.rejected_format = reshade::api::format::unknown;
+    state.rejected_color_space = reshade::api::color_space::unknown;
     return true;
+}
+
+void on_init_swapchain(reshade::api::swapchain *swapchain, bool) {
+    std::lock_guard lock(g_baker_probe_mutex);
+    g_swapchain_color_spaces[swapchain->get_hwnd()] = swapchain->get_color_space();
+}
+
+void on_destroy_swapchain(reshade::api::swapchain *swapchain, bool) {
+    std::lock_guard lock(g_baker_probe_mutex);
+    g_swapchain_color_spaces.erase(swapchain->get_hwnd());
+}
+
+void on_present(reshade::api::command_queue *, reshade::api::swapchain *swapchain,
+                const reshade::api::rect *, const reshade::api::rect *, std::uint32_t,
+                const reshade::api::rect *) {
+    std::lock_guard lock(g_baker_probe_mutex);
+    g_swapchain_color_spaces[swapchain->get_hwnd()] = swapchain->get_color_space();
 }
 
 void on_baker_init_device(reshade::api::device *device) {
@@ -2105,6 +2167,12 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
     auto *queue = runtime->get_command_queue();
     const auto source = device->get_resource_from_view(rtv);
     const auto source_desc = device->get_resource_desc(source);
+    reshade::api::color_space color_space = reshade::api::color_space::unknown;
+    {
+        std::lock_guard lock(g_baker_probe_mutex);
+        if (const auto found = g_swapchain_color_spaces.find(runtime->get_hwnd());
+            found != g_swapchain_color_spaces.end()) color_space = found->second;
+    }
     if ((device->get_api() == reshade::api::device_api::d3d9 ||
          device->get_api() == reshade::api::device_api::d3d10 ||
          device->get_api() == reshade::api::device_api::d3d11 ||
@@ -2157,9 +2225,13 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
             }
         }
     }
-    if (state->copy_fence == 0 || !ensure_readback(runtime, *state, source_desc)) return;
+    if (state->copy_fence == 0 ||
+        !ensure_readback(runtime, *state, source_desc, color_space)) return;
     const auto width = state->capture_width;
     const auto height = state->capture_height;
+    if (state->color_mode_variable != 0)
+        runtime->set_uniform_value_int(state->color_mode_variable,
+            static_cast<std::int32_t>(state->capture_encoding));
 
     std::vector<std::uint8_t> styled, valid;
     {
@@ -2206,12 +2278,15 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
             const auto *source_bytes = static_cast<const std::uint8_t *>(mapped.data);
             for (std::uint32_t y = 0; y < height; ++y) {
                 for (std::uint32_t x = 0; x < width; ++x) {
-                    const auto si = static_cast<std::size_t>(y) * mapped.row_pitch + x * 4;
+                    const auto si = static_cast<std::size_t>(y) * mapped.row_pitch +
+                        static_cast<std::size_t>(x) * state->capture_bytes_per_pixel;
                     const auto di = (static_cast<std::size_t>(y) * width + x) * 4;
-                    captured.rgba[di+0] = source_bytes[si + (state->capture_bgra ? 2 : 0)];
-                    captured.rgba[di+1] = source_bytes[si+1];
-                    captured.rgba[di+2] = source_bytes[si + (state->capture_bgra ? 0 : 2)];
-                    captured.rgba[di+3] = 255;
+                    const auto converted = neuralpass::decode_capture_pixel(source_bytes + si,
+                        state->capture_layout, state->capture_encoding);
+                    captured.rgba[di+0] = byte(converted.r);
+                    captured.rgba[di+1] = byte(converted.g);
+                    captured.rgba[di+2] = byte(converted.b);
+                    captured.rgba[di+3] = byte(converted.a);
                 }
             }
             device->unmap_texture_region(state->readback[index], 0);
@@ -2260,6 +2335,12 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         backend = state->backend_name;
     }
     ImGui::Text("Backend: %s", backend.c_str());
+    const char *color_path = "SDR sRGB";
+    if (state->capture_encoding == neuralpass::DisplayEncoding::scrgb_linear)
+        color_path = "scRGB linear (experimental)";
+    else if (state->capture_encoding == neuralpass::DisplayEncoding::hdr10_pq)
+        color_path = "HDR10 PQ (experimental)";
+    ImGui::Text("Display color path: %s", color_path);
     ImGui::Text("Submitted: %llu  Completed: %llu  Dropped: %llu",
         static_cast<unsigned long long>(state->submitted.load()),
         static_cast<unsigned long long>(state->completed.load()),
@@ -2491,6 +2572,9 @@ extern "C" __declspec(dllexport) bool AddonInit(HMODULE addon_module, HMODULE re
     GetModuleFileNameW(addon_module, path, MAX_PATH);
     g_addon_directory = std::filesystem::path(path).parent_path();
     descriptor_tracking::register_events();
+    reshade::register_event<reshade::addon_event::init_swapchain>(on_init_swapchain);
+    reshade::register_event<reshade::addon_event::destroy_swapchain>(on_destroy_swapchain);
+    reshade::register_event<reshade::addon_event::present>(on_present);
     reshade::register_event<reshade::addon_event::init_device>(on_baker_init_device);
     reshade::register_event<reshade::addon_event::destroy_device>(on_baker_destroy_device);
     reshade::register_event<reshade::addon_event::init_pipeline>(on_baker_init_pipeline);

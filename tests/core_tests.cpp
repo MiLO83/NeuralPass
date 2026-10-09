@@ -1,5 +1,6 @@
 #include "neuralpass/temporal.hpp"
 #include "neuralpass/binding_identity.hpp"
+#include "neuralpass/color_pipeline.hpp"
 #include "neuralpass/depth_pyramid.hpp"
 #include "neuralpass/tile_scheduler.hpp"
 #include "neuralpass/inference.hpp"
@@ -12,6 +13,8 @@
 #include <array>
 #include <cstdlib>
 #include <chrono>
+#include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -102,6 +105,51 @@ static void test_preview_backend_is_bounded() {
     for (const auto &pixel : output.pixels())
         require(pixel.r >= 0.0f && pixel.r <= 1.0f && pixel.g >= 0.0f && pixel.g <= 1.0f &&
                 pixel.b >= 0.0f && pixel.b <= 1.0f, "preview produced an invalid color");
+}
+
+static void test_hdr_color_contract_is_bounded_and_luminance_stable() {
+    require(half_to_float(0x0000u) == 0.0f && half_to_float(0x3c00u) == 1.0f &&
+            std::abs(half_to_float(0x4400u) - 4.0f) < 0.001f,
+            "FP16 decoding changed canonical values");
+
+    const std::array<std::uint16_t, 4> scrgb_half {0x4400u, 0x4400u, 0x4400u, 0x3c00u};
+    std::array<std::uint8_t, 8> scrgb_bytes {};
+    std::memcpy(scrgb_bytes.data(), scrgb_half.data(), scrgb_bytes.size());
+    const auto inference = decode_capture_pixel(scrgb_bytes.data(),
+        CapturePixelLayout::rgba16_float, DisplayEncoding::scrgb_linear);
+    require(inference.r > 0.9f && inference.r <= 1.0f &&
+            inference.r == inference.g && inference.g == inference.b,
+            "scRGB capture was not tone-mapped into bounded neutral sRGB");
+    const auto restored = composite_styled_pixel({4.0f, 4.0f, 4.0f, 1.0f},
+        inference, DisplayEncoding::scrgb_linear);
+    require(std::abs(restored.r - 4.0f) < 0.01f &&
+            std::abs(restored.g - 4.0f) < 0.01f &&
+            std::abs(restored.b - 4.0f) < 0.01f,
+            "identity-styled scRGB did not restore source luminance");
+
+    // 0.508 is approximately 100 nits in ST.2084. An identity style should
+    // survive the BT.2020/PQ round trip despite RGB10 quantization.
+    const std::uint32_t pq_code = 520u;
+    const std::uint32_t packed = pq_code | pq_code << 10 | pq_code << 20 | 3u << 30;
+    std::array<std::uint8_t, 4> pq_bytes {};
+    std::memcpy(pq_bytes.data(), &packed, sizeof(packed));
+    const auto pq_inference = decode_capture_pixel(pq_bytes.data(),
+        CapturePixelLayout::rgb10a2, DisplayEncoding::hdr10_pq);
+    const float encoded = static_cast<float>(pq_code) / 1023.0f;
+    const auto pq_restored = composite_styled_pixel(
+        {encoded, encoded, encoded, 1.0f}, pq_inference, DisplayEncoding::hdr10_pq);
+    require(std::abs(pq_restored.r - encoded) < 0.002f &&
+            std::abs(pq_restored.g - encoded) < 0.002f &&
+            std::abs(pq_restored.b - encoded) < 0.002f,
+            "identity-styled HDR10 did not preserve PQ luminance");
+
+    const std::array<std::uint16_t, 4> invalid_half {0x7e00u, 0xfc00u, 0x0000u, 0x3c00u};
+    std::memcpy(scrgb_bytes.data(), invalid_half.data(), scrgb_bytes.size());
+    const auto sanitized = decode_capture_pixel(scrgb_bytes.data(),
+        CapturePixelLayout::rgba16_float, DisplayEncoding::scrgb_linear);
+    require(std::isfinite(sanitized.r) && std::isfinite(sanitized.g) &&
+            sanitized.r == 0.0f && sanitized.g == 0.0f,
+            "non-finite HDR capture values reached inference");
 }
 
 static void test_binding_identity_is_pipeline_and_slot_specific() {
@@ -693,6 +741,7 @@ int main() {
         test_dilation_and_priority();
         test_age_refresh();
         test_preview_backend_is_bounded();
+        test_hdr_color_contract_is_bounded_and_luminance_stable();
         test_binding_identity_is_pipeline_and_slot_specific();
         test_depth_pyramid_and_conservative_raymarch();
         test_visibility_classifies_newly_revealed_causes();

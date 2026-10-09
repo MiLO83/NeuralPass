@@ -156,6 +156,11 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [~] Support ONNX Runtime DirectML on NVIDIA, AMD, and Intel.
     Evidence: pinned Candy model executes through ONNX CPU and DirectML with finite,
     dimension-correct output on NVIDIA RTX 5060 Ti; AMD and Intel hardware remain.
+[~] Preserve HDR/scRGB through capture, inference conversion, and composition.
+    Evidence: capture requires a proven FP16/scRGB or RGB10A2/HDR10-PQ pair;
+    portable tests cover FP16 sanitization, bounded inference input, and neutral
+    scRGB/PQ luminance round trips; the Windows add-on build and full native suite
+    pass. HDR monitor/game evidence and HLG remain.
 [ ] Add optional CUDA acceleration.
 [!] Restore and verify the current StreamDiffusion environment.
     Blocker: the moved WSL environment is missing torch and onnxruntime packages.
@@ -220,7 +225,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [x] Shared sources with distinct bindings receive separate replacements.
     Evidence: D3D9 HAL and D3D10/D3D11 WARP alternate two binding-keyed atlas replacements over the
     same source SRV and verifies that each draw receives only its own styled pixels.
-[ ] UV seams, overlapping UVs, alpha cutouts, HDR, and depth conflicts remain isolated.
+[~] UV seams, overlapping UVs, alpha cutouts, HDR, and depth conflicts remain isolated.
+    Evidence: HDR format/color-space mismatches are rejected and neutral scRGB/PQ
+    round trips pass; geometry seam/layer and live HDR evidence remain.
 [~] D3D9 reference, D3D10/11/12 WARP, and Vulkan SwiftShader suites pass.
     Evidence: D3D10/D3D11 replay/replacement and D3D12 resource/barrier/fence/readback plus
     native descriptor-isolation and backend replay WARP suites pass; production-created

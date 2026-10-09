@@ -284,7 +284,11 @@ backend without starting the game.
   Compressed, HDR/float, array, and multisampled sources retain screen-space output.
 - D3D9 capture requires four 32-bit floating-point MRTs, performs a synchronous
   readback, cannot recover fragment depth, and replaces only lockable 32-bit textures.
-- v0.1 supports SDR RGBA8 capture. HDR/scRGB is not processed correctly yet.
+- The compositor now has format- and color-space-checked paths for linear FP16
+  scRGB and RGB10A2 HDR10/PQ. Capture is tone-mapped to bounded sRGB for inference,
+  then styled chroma/contrast is mapped back while retaining scene luminance.
+  Mismatched or unknown HDR format/color-space pairs are bypassed. The math has
+  automated round-trip coverage, but HDR monitor/game validation remains.
 - DirectML model execution has an automated NVIDIA smoke test on the development
   machine; AMD and Intel execution still require hardware validation.
 - The screen-space fallback cannot follow large camera motion as accurately as
