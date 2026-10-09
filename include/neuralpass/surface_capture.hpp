@@ -88,6 +88,10 @@ public:
         std::span<const SurfaceCorrespondence> correspondence);
     [[nodiscard]] SceneKey scene_key() const noexcept { return scene_key_; }
     void set_scene_identity(std::uint64_t identity) noexcept { scene_key_.identity = identity; }
+    // Manual resolution hooks use the same validated correspondence contract
+    // as automatic classification and always invalidate async generations.
+    void keep_current_scene(std::span<const SurfaceCorrespondence> correspondence);
+    void start_new_scene(std::span<const SurfaceCorrespondence> correspondence);
     void reset();
 
 private:

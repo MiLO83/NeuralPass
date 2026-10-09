@@ -167,6 +167,16 @@ SceneCacheSelection SceneCacheCatalog::resolve(
     return {created, root_ / ("scene-" + hex(created)), false};
 }
 
+SceneCacheSelection SceneCacheCatalog::create_new(
+    std::span<const std::uint64_t> visible_binding_ids,
+    std::uint64_t discriminator) const {
+    auto visible = canonical(visible_binding_ids);
+    if (visible.empty()) return {};
+    visible.push_back(discriminator == 0 ? 1 : discriminator);
+    const auto created = identity(visible);
+    return {created, root_ / ("scene-" + hex(created)), false};
+}
+
 bool SceneCacheCatalog::record(
     std::uint64_t scene_identity,
     std::span<const std::uint64_t> visible_binding_ids) const {

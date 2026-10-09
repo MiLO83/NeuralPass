@@ -438,6 +438,23 @@ static void test_scene_transition_preserves_camera_cuts_and_confirms_new_scenes(
     require(recovered.observe(false, room) == SceneTransition::camera_cut,
             "returning same-scene materials did not resolve as a camera cut");
 
+    SceneTransitionTracker manual({.material_overlap_threshold=0.25f,
+                                   .scene_change_confirmation_frames=3});
+    require(manual.observe(false, room) == SceneTransition::stable,
+            "manual-control fixture did not establish its scene");
+    const auto manual_room_key = manual.scene_key();
+    require(manual.observe(true, other) == SceneTransition::pending_scene_change,
+            "manual-control fixture did not enter quarantine");
+    manual.keep_current_scene(other);
+    require(manual.scene_key() != manual_room_key &&
+            manual.observe(false, other) == SceneTransition::stable,
+            "keep-current control did not accept quarantined evidence");
+    const auto kept_key = manual.scene_key();
+    manual.start_new_scene(room);
+    require(manual.scene_key() != kept_key && manual.scene_key().identity == 0 &&
+            manual.observe(false, room) == SceneTransition::stable,
+            "start-new control did not force a fresh scene generation");
+
     SceneTransitionTracker no_geometry;
     const auto before_reset = no_geometry.scene_key();
     require(no_geometry.observe(true, {}) == SceneTransition::camera_cut,
@@ -477,6 +494,33 @@ static void test_same_scene_camera_cut_preserves_atlas_and_reveals_new_uvs() {
             "camera cut did not preserve known UVs and reveal only the new angle");
     require(baker.commit(changed_plan, styled, changed_angle).accepted == 1,
             "newly visible same-scene UV was not accepted after a camera cut");
+}
+
+static void test_pending_scene_quarantine_cannot_commit_texture_data() {
+    MaterialTextureBaker baker({.atlas_width=16, .atlas_height=8});
+    SceneTransitionTracker tracker({.material_overlap_threshold=0.5f,
+                                    .scene_change_confirmation_frames=3});
+    Image<Color> frame(1, 1, {0.7f, 0.2f, 0.1f, 1.0f});
+    const SurfaceCorrespondence original {0, 0, 6101, 0.25f, 0.5f, 1.0f};
+    require(tracker.observe(false, std::span(&original, 1)) == SceneTransition::stable,
+            "quarantine fixture did not establish its scene");
+    const auto old_request = baker.plan(frame, std::span(&original, 1));
+
+    const SurfaceCorrespondence foreign {0, 0, 9901, 0.75f, 0.5f, 1.0f};
+    require(tracker.observe(true, std::span(&foreign, 1)) ==
+                SceneTransition::pending_scene_change,
+            "foreign scene did not enter quarantine");
+    baker.invalidate_in_flight();
+    const auto old_commit = baker.commit(old_request, frame, std::span(&original, 1));
+    require(old_commit.stale && old_commit.accepted == 0 && baker.find(6101) == nullptr,
+            "pre-quarantine inference committed after an ambiguous cut");
+
+    const std::span<const SurfaceCorrespondence> quarantined {};
+    const auto pending_plan = baker.plan(frame, quarantined);
+    require(pending_plan.revealed_pixels == 0 &&
+            baker.commit(pending_plan, frame, quarantined).accepted == 0 &&
+            baker.find(9901) == nullptr,
+            "quarantined foreign observation mutated texture coverage");
 }
 
 static void test_atlas_cache_round_trip_and_rejects_corruption() {
@@ -553,6 +597,13 @@ static void test_scene_cache_catalog_matches_returning_views_and_isolates_scenes
             "foreign scene reused an unrelated cache namespace");
     require(catalog.record(isolated.identity, foreign),
             "foreign scene namespace was not recorded");
+    const auto forced = catalog.create_new(room, 0xfeedbeef);
+    require(forced.valid() && !forced.matched_existing &&
+            forced.identity != created.identity,
+            "manual start-new did not force a distinct scene namespace");
+    require(catalog.create_new(room, 0xfeedbeef).identity == forced.identity &&
+            catalog.create_new(room, 0xfeedbef0).identity != forced.identity,
+            "forced scene namespace discriminator is not deterministic");
 
     {
         std::ofstream corrupt(isolated.directory / "materials-corrupt.npscene", std::ios::binary);
@@ -588,6 +639,7 @@ int main() {
         test_surface_capture_compacts_backend_neutral_pixels();
         test_scene_transition_preserves_camera_cuts_and_confirms_new_scenes();
         test_same_scene_camera_cut_preserves_atlas_and_reveals_new_uvs();
+        test_pending_scene_quarantine_cannot_commit_texture_data();
         test_atlas_cache_round_trip_and_rejects_corruption();
         test_scene_cache_catalog_matches_returning_views_and_isolates_scenes();
         std::cout << "NeuralPass core tests passed\n";

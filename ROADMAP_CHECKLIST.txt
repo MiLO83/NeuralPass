@@ -41,8 +41,12 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     and unsupported samples.
     Evidence: backend-neutral dense classifier tests every cause and camera-cut reset;
     live motion/depth adapter feeds remain.
-[ ] Add manual Keep current scene, Start new scene, and Merge scene controls.
-[ ] Prove that uncertain scene classification commits no texture data.
+[x] Add manual Keep current scene, Start new scene, and Merge scene controls.
+    Evidence: ReShade overlay commands, forced namespace/merge worker paths, and
+    tracker/catalog control tests; Windows add-on build passes.
+[x] Prove that uncertain scene classification commits no texture data.
+    Evidence: combined quarantine test rejects pre-cut inference and exposes no
+    foreign correspondence to bake planning or commit.
 
 2. TEXTURE-SPACE SPLATTING
 --------------------------

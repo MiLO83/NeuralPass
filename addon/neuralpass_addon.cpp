@@ -155,6 +155,13 @@ struct CapturedFrame {
     std::vector<std::uint8_t> rgba;
 };
 
+enum class ManualSceneCommand : int {
+    none,
+    keep_current,
+    start_new,
+    merge_visible,
+};
+
 void on_baker_init_pipeline(reshade::api::device *device, reshade::api::pipeline_layout layout,
                             std::uint32_t subobject_count,
                             const reshade::api::pipeline_subobject *subobjects,
@@ -709,6 +716,10 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::atomic_bool reset_requested = false;
     std::atomic_bool sticky_history = true;
     std::atomic_bool stream_bridge = true;
+    std::atomic_int scene_command = static_cast<int>(ManualSceneCommand::none);
+    std::atomic_uint64_t active_scene_identity = 0;
+    std::atomic_uint64_t scene_generation = 1;
+    std::atomic_int scene_transition = static_cast<int>(neuralpass::SceneTransition::stable);
     std::atomic_int requested_preset = 0;
     std::array<char, 512> prompt {};
     std::vector<std::string> prompt_history;
@@ -971,11 +982,16 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         (void)material_baker.save_cache(active_scene->directory / "atlases", stable);
         (void)scene_catalog.record(active_scene->identity, stable);
     };
-    auto activate_scene = [&](std::span<const std::uint64_t> stable) {
+    auto activate_scene = [&](std::span<const std::uint64_t> stable, bool force_new = false) {
         if (stable.empty()) return;
-        active_scene = scene_catalog.resolve(stable);
+        active_scene = force_new
+            ? scene_catalog.create_new(stable, static_cast<std::uint64_t>(
+                std::chrono::steady_clock::now().time_since_epoch().count()))
+            : scene_catalog.resolve(stable);
         active_scene_materials.insert(stable.begin(), stable.end());
         scene_transitions.set_scene_identity(active_scene->identity);
+        state->active_scene_identity = active_scene->identity;
+        if (force_new) (void)scene_catalog.record(active_scene->identity, stable);
         const auto loaded = material_baker.load_cache(active_scene->directory / "atlases");
         if (loaded.loaded != 0)
             reshade::log::message(reshade::log::level::info,
@@ -1050,14 +1066,38 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         const bool visual_cut = !previous_scene.empty() &&
             neuralpass::is_camera_cut(current, cut_reference);
         previous_scene = current;
-        const auto transition = scene_transitions.observe(visual_cut, correspondence);
+        auto transition = scene_transitions.observe(visual_cut, correspondence);
         const auto visible_stable = stable_visible(correspondence);
+        const auto manual = static_cast<ManualSceneCommand>(state->scene_command.exchange(
+            static_cast<int>(ManualSceneCommand::none)));
+        bool force_new_scene = false;
+        if (manual == ManualSceneCommand::keep_current) {
+            scene_transitions.keep_current_scene(correspondence);
+            transition = neuralpass::SceneTransition::camera_cut;
+        } else if (manual == ManualSceneCommand::start_new) {
+            scene_transitions.start_new_scene(correspondence);
+            transition = neuralpass::SceneTransition::scene_change;
+            force_new_scene = true;
+        } else if (manual == ManualSceneCommand::merge_visible) {
+            if (active_scene && !visible_stable.empty()) {
+                const auto imported = scene_catalog.resolve(visible_stable);
+                if (imported.valid() && imported.identity != active_scene->identity)
+                    (void)material_baker.load_cache(imported.directory / "atlases", false);
+                active_scene_materials.insert(visible_stable.begin(), visible_stable.end());
+                (void)scene_catalog.record(active_scene->identity, visible_stable);
+            } else if (!active_scene) {
+                activate_scene(visible_stable);
+            }
+            scene_transitions.keep_current_scene(correspondence);
+            transition = neuralpass::SceneTransition::camera_cut;
+        }
         if (transition == neuralpass::SceneTransition::scene_change) {
             save_active_scene();
             material_baker.reset_scene();
             active_scene.reset();
             active_scene_materials.clear();
-            activate_scene(visible_stable);
+            state->active_scene_identity = 0;
+            activate_scene(visible_stable, force_new_scene);
             bridge_bake.reset();
         } else if (transition == neuralpass::SceneTransition::camera_cut ||
                    transition == neuralpass::SceneTransition::pending_scene_change) {
@@ -1074,6 +1114,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         // scene's persistent atlases until identity resolves.
         if (transition == neuralpass::SceneTransition::pending_scene_change)
             correspondence.clear();
+        state->scene_transition = static_cast<int>(transition);
+        state->scene_generation = scene_transitions.scene_key().generation;
         if (state->stream_bridge.load()) {
             auto current_plan = material_baker.plan(current, correspondence);
             const auto seeded = pack(current_plan.composite);
@@ -1603,6 +1645,30 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         ImGui::TextWrapped(runtime->get_device()->get_api() == reshade::api::device_api::d3d11
             ? "D3D11 UV-bearing draws are replayed into the asynchronous surface capture."
             : "UV-bearing draws detected; this API still needs its replay adapter.");
+    ImGui::SeparatorText("Scene identity");
+    const auto transition = static_cast<neuralpass::SceneTransition>(
+        state->scene_transition.load());
+    const char *transition_name = "stable";
+    switch (transition) {
+    case neuralpass::SceneTransition::camera_cut: transition_name = "camera cut"; break;
+    case neuralpass::SceneTransition::pending_scene_change: transition_name = "quarantined"; break;
+    case neuralpass::SceneTransition::scene_change: transition_name = "new scene"; break;
+    default: break;
+    }
+    ImGui::Text("Persistent ID: %016llx  Generation: %llu  State: %s",
+        static_cast<unsigned long long>(state->active_scene_identity.load()),
+        static_cast<unsigned long long>(state->scene_generation.load()),
+        transition_name);
+    if (ImGui::Button("Keep current scene"))
+        state->scene_command = static_cast<int>(ManualSceneCommand::keep_current);
+    ImGui::SameLine();
+    if (ImGui::Button("Start new scene"))
+        state->scene_command = static_cast<int>(ManualSceneCommand::start_new);
+    ImGui::SameLine();
+    if (ImGui::Button("Merge visible scene"))
+        state->scene_command = static_cast<int>(ManualSceneCommand::merge_visible);
+    ImGui::TextWrapped("Keep accepts quarantined bindings; Start creates an isolated cache; "
+                       "Merge imports the matching visible cache into the active scene.");
     int budget = static_cast<int>(state->tile_budget.load());
     if (ImGui::SliderInt("Tiles per worker update", &budget, 1, 16))
         state->tile_budget = static_cast<std::uint32_t>(budget);

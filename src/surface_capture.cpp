@@ -13,6 +13,15 @@ void advance(SceneKey &key) noexcept {
     if (key.generation == 0) key.generation = 1;
 }
 
+std::unordered_set<std::uint64_t> visible_materials(
+    std::span<const SurfaceCorrespondence> correspondence) {
+    std::unordered_set<std::uint64_t> visible;
+    for (const auto &sample : correspondence)
+        if (sample.material_id != 0 && std::isfinite(sample.confidence) && sample.confidence > 0.0f)
+            visible.insert(sample.material_id);
+    return visible;
+}
+
 } // namespace
 
 std::vector<SurfaceCorrespondence> SurfaceCaptureFrame::correspondences(
@@ -63,10 +72,7 @@ float SceneTransitionTracker::overlap(
 SceneTransition SceneTransitionTracker::observe(
     bool visual_cut,
     std::span<const SurfaceCorrespondence> correspondence) {
-    std::unordered_set<std::uint64_t> visible;
-    for (const auto &sample : correspondence)
-        if (sample.material_id != 0 && std::isfinite(sample.confidence) && sample.confidence > 0.0f)
-            visible.insert(sample.material_id);
+    auto visible = visible_materials(correspondence);
 
     if (scene_materials_.empty()) {
         scene_materials_ = visible;
@@ -104,6 +110,24 @@ SceneTransition SceneTransitionTracker::observe(
 
     if (related) scene_materials_.insert(visible.begin(), visible.end());
     return SceneTransition::stable;
+}
+
+void SceneTransitionTracker::keep_current_scene(
+    std::span<const SurfaceCorrespondence> correspondence) {
+    const auto visible = visible_materials(correspondence);
+    scene_materials_.insert(visible.begin(), visible.end());
+    candidate_materials_.clear();
+    foreign_frames_ = 0;
+    advance(scene_key_);
+}
+
+void SceneTransitionTracker::start_new_scene(
+    std::span<const SurfaceCorrespondence> correspondence) {
+    scene_materials_ = visible_materials(correspondence);
+    candidate_materials_.clear();
+    foreign_frames_ = 0;
+    scene_key_.identity = 0;
+    advance(scene_key_);
 }
 
 void SceneTransitionTracker::reset() {

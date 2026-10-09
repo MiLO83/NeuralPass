@@ -24,6 +24,9 @@ public:
 
     [[nodiscard]] SceneCacheSelection resolve(
         std::span<const std::uint64_t> visible_binding_ids) const;
+    [[nodiscard]] SceneCacheSelection create_new(
+        std::span<const std::uint64_t> visible_binding_ids,
+        std::uint64_t discriminator) const;
     [[nodiscard]] bool record(
         std::uint64_t scene_identity,
         std::span<const std::uint64_t> visible_binding_ids) const;
