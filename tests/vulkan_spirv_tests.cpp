@@ -1,4 +1,5 @@
 #include "vulkan_capture_shader_spv.hpp"
+#include "vulkan_capture_combined_spv.hpp"
 #include "vulkan_instrument_test_spv.hpp"
 #include "vulkan_spirv.hpp"
 
@@ -24,19 +25,25 @@ std::vector<std::uint32_t> shader_words(const unsigned char *bytes,
     return result;
 }
 
-std::size_t location_count(std::span<const std::uint32_t> words,
-                           std::uint32_t location) {
+std::size_t decoration_count(std::span<const std::uint32_t> words,
+                             std::uint32_t decoration,
+                             std::uint32_t value) {
     std::size_t result = 0;
     for (std::size_t offset = 5; offset < words.size();) {
         const auto count = words[offset] >> 16;
         require(count != 0 && offset + count <= words.size(),
                 "malformed SPIR-V in location counter");
         if (static_cast<std::uint16_t>(words[offset]) == 71 && count >= 4 &&
-            words[offset + 2] == 30 && words[offset + 3] == location)
+            words[offset + 2] == decoration && words[offset + 3] == value)
             ++result;
         offset += count;
     }
     return result;
+}
+
+std::size_t location_count(std::span<const std::uint32_t> words,
+                           std::uint32_t location) {
+    return decoration_count(words, 30, location);
 }
 
 void test_capture_location_patch() {
@@ -59,6 +66,22 @@ void test_capture_location_patch() {
     require(neuralpass::vulkan_capture::spirv::patch_unique_location(
                 ambiguous, 31, 7).empty(),
             "ambiguous sentinel locations were accepted");
+}
+
+void test_combined_sampler_patch() {
+    auto words = shader_words(neuralpass_vulkan_capture_combined_spv,
+                              sizeof(neuralpass_vulkan_capture_combined_spv));
+    require(decoration_count(words, 34, 31) == 1 &&
+            decoration_count(words, 33, 31) == 1,
+            "combined source shader descriptor sentinels are not unique");
+    words = neuralpass::vulkan_capture::spirv::patch_unique_decoration(
+        words, 34, 31, 3);
+    require(!words.empty(), "combined source descriptor set patch failed");
+    words = neuralpass::vulkan_capture::spirv::patch_unique_decoration(
+        words, 33, 31, 9);
+    require(!words.empty() && decoration_count(words, 34, 3) == 1 &&
+            decoration_count(words, 33, 9) == 1 && location_count(words, 31) == 1,
+            "combined source descriptor patch changed another decoration");
 }
 
 void test_vertex_uv_instrumentation() {
@@ -119,6 +142,7 @@ void test_float2_output_detection() {
 int main() {
     try {
         test_capture_location_patch();
+        test_combined_sampler_patch();
         test_float2_output_detection();
         test_vertex_uv_instrumentation();
         std::cout << "Vulkan SPIR-V tests passed\n";

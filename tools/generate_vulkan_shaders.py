@@ -56,6 +56,12 @@ def main() -> int:
     )
     compile_shader(
         compiler,
+        ROOT / "addon/shaders/vulkan_capture_combined.frag",
+        "neuralpass_vulkan_capture_combined_spv",
+        ROOT / "addon/vulkan_capture_combined_spv.hpp",
+    )
+    compile_shader(
+        compiler,
         ROOT / "tests/shaders/vulkan_instrument_test.vert",
         "neuralpass_vulkan_instrument_test_spv",
         ROOT / "tests/vulkan_instrument_test_spv.hpp",

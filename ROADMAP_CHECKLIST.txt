@@ -109,7 +109,8 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     performs asynchronous readback through a three-slot generic fence ring. Windows
     add-on compilation and tests of
     a real compiled vertex fixture, malformed/ambiguous modules, and SPIR-V Tools
-    validation pass; SwiftShader/driver replay, source sampling, replacement,
+    validation pass. A patched combined image-sampler variant captures source color;
+    SwiftShader/driver replay, separate source descriptors, replacement,
     device loss, x86, and real-game evidence remain.
 [~] Support indexed, non-indexed, instanced, and indirect draws.
     Evidence: D3D11 handles direct and indirect indexed/non-indexed instanced draws,

@@ -11,7 +11,7 @@ full add-on build of ReShade. It is not suitable for protected multiplayer games
 | D3D11 | Experimental geometry capture and RGBA8/BGRA8 replacement |
 | D3D9 / D3D10 | Screen-space effect only; geometry adapter not implemented |
 | D3D12 | Experimental PSO replay, source sampling, bounded-table RGBA8/BGRA8 replacement, barriers, and fence/readback ring; real-game evidence pending |
-| Vulkan | Experimental SPIR-V UV instrumentation, replay, and asynchronous readback; no source sampling, replacement, or driver/game evidence |
+| Vulkan | Experimental SPIR-V UV capture, combined-sampler source capture, and asynchronous readback; no replacement or driver/game evidence |
 | SDR RGBA8 | Supported preview path |
 | HDR / scRGB | Not supported correctly; leave NeuralPass disabled |
 | DirectML | Model execution smoke-tested on NVIDIA; AMD and Intel hardware validation remains |

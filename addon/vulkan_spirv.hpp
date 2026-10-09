@@ -23,11 +23,9 @@ struct InstrumentedVertex {
     }
 };
 
-// Changes one deliberately reserved interface location. Refuse malformed modules
-// and ambiguous modules so a shader update cannot silently patch the wrong value.
-[[nodiscard]] inline std::vector<std::uint32_t> patch_unique_location(
-    std::span<const std::uint32_t> source, std::uint32_t sentinel,
-    std::uint32_t replacement) {
+[[nodiscard]] inline std::vector<std::uint32_t> patch_unique_decoration(
+    std::span<const std::uint32_t> source, std::uint32_t decoration,
+    std::uint32_t sentinel, std::uint32_t replacement) {
     if (source.size() < 5 || source.front() != k_magic) return {};
     std::vector<std::uint32_t> result(source.begin(), source.end());
     std::size_t matches = 0;
@@ -37,7 +35,7 @@ struct InstrumentedVertex {
         const auto opcode = static_cast<std::uint16_t>(instruction);
         if (count == 0 || offset + count > result.size()) return {};
         if (opcode == 71 && count >= 4 &&
-            result[offset + 2] == k_location_decoration &&
+            result[offset + 2] == decoration &&
             result[offset + 3] == sentinel) {
             result[offset + 3] = replacement;
             ++matches;
@@ -45,6 +43,15 @@ struct InstrumentedVertex {
         offset += count;
     }
     return matches == 1 ? result : std::vector<std::uint32_t> {};
+}
+
+// Changes one deliberately reserved interface location. Refuse malformed modules
+// and ambiguous modules so a shader update cannot silently patch the wrong value.
+[[nodiscard]] inline std::vector<std::uint32_t> patch_unique_location(
+    std::span<const std::uint32_t> source, std::uint32_t sentinel,
+    std::uint32_t replacement) {
+    return patch_unique_decoration(
+        source, k_location_decoration, sentinel, replacement);
 }
 
 // This is intentionally conservative. A location is accepted only when the

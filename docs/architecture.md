@@ -188,6 +188,13 @@ locations are rejected instead of receiving guessed UV data. Material identity
 is supplied through specialization constants, while the application's original
 vertex specialization constants are retained.
 
+When the selected base-color candidate is a non-array combined image sampler,
+a second embedded fragment variant patches its descriptor-set and binding
+decorations to the application's existing layout. It samples with the captured
+UV derivatives and rejects fully transparent texels. Separate image/sampler
+descriptors and descriptor arrays currently emit NaN source color and remain
+outside source-transfer baking.
+
 The current transformer targets vertex-to-fragment pipelines. Tessellation,
 geometry, and mesh-shader pipelines stay on screen-space fallback because their
 final pre-raster stage must be instrumented instead of assuming a vertex output
@@ -199,7 +206,7 @@ with equal depth testing and writes disabled, then restores the application
 pipeline and render/depth attachments. Capture targets are explicitly transitioned
 into a three-slot buffer ring on ReShade's immediate command list; generic queue
 fences expose only completed slots without a normal-path CPU wait. Native
-render-pass draws, MSAA targets, source-texture sampling, replacement descriptors,
+render-pass draws, MSAA targets, general source-descriptor layouts, replacement descriptors,
 device-loss recovery, SwiftShader coverage, and real-driver
 game evidence remain promotion gates. The checked-in SPIR-V is generated from
 `addon/shaders/vulkan_capture.frag`; a platform-neutral test instruments a real

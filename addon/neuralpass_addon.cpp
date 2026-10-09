@@ -613,15 +613,18 @@ void on_baker_bind_descriptor_tables(reshade::api::command_list *command_list,
                 command_list->get_device()->get_descriptor_heap_offset(
                     tables[table_index], range.binding, 0, &heap, &base_offset);
                 for (std::uint32_t element = 0; element < range.count; ++element) {
+                    const auto array_size = std::max(1u, range.array_size);
+                    const auto binding = range.binding + element / array_size;
+                    const auto array_offset = element % array_size;
                     const auto slot = descriptor_slot(
-                        layout, first + table_index, range.binding, element);
+                        layout, first + table_index, binding, array_offset);
                     if (range.type == reshade::api::descriptor_type::shader_resource_view ||
                         range.type == reshade::api::descriptor_type::sampler_with_resource_view)
                         track_pixel_descriptor(*state, slot,
                             tracking->get_resource_view(heap, base_offset + element),
                             range.dx_register_index + element, range.dx_register_space,
                             tables[table_index], first + table_index,
-                            range.binding + element, 0, range.type);
+                            binding, array_offset, range.type);
                     if (range.type == reshade::api::descriptor_type::sampler ||
                         range.type == reshade::api::descriptor_type::sampler_with_resource_view)
                         track_pixel_sampler(*state, slot,
@@ -899,13 +902,14 @@ neuralpass::BindingInstanceKey record_baker_draw(
     return {};
 }
 
-void configure_d3d12_draw_state(reshade::api::command_list *command_list,
-                                const BakerCommandState &state,
-                                neuralpass::capture::SurfaceCaptureBackend *capture,
-                                neuralpass::capture::DrawCommand &draw,
-                                int source_override) {
-    auto *d3d12 = dynamic_cast<neuralpass::d3d12_capture::SurfaceCapture *>(capture);
-    if (d3d12 == nullptr) return;
+void configure_explicit_draw_state(reshade::api::command_list *command_list,
+                                   const BakerCommandState &state,
+                                   neuralpass::capture::SurfaceCaptureBackend *capture,
+                                   neuralpass::capture::DrawCommand &draw,
+                                   int source_override) {
+    if (dynamic_cast<neuralpass::d3d12_capture::SurfaceCapture *>(capture) == nullptr &&
+        dynamic_cast<neuralpass::vulkan_capture::SurfaceCapture *>(capture) == nullptr)
+        return;
     draw.pipeline = state.pipeline.handle;
     draw.pipeline_layout = state.layout.handle;
     draw.render_target_count = state.render_target_count;
@@ -916,6 +920,7 @@ void configure_d3d12_draw_state(reshade::api::command_list *command_list,
         draw.render_target_views[index] = state.render_targets[index].handle;
 
     const BakerPixelResource *best_source = nullptr;
+    std::uint64_t best_source_slot = 0;
     std::uint64_t best_score = 0;
     for (const auto &[slot, binding] : state.pixel_resources) {
         (void)slot;
@@ -938,6 +943,7 @@ void configure_d3d12_draw_state(reshade::api::command_list *command_list,
             desc.texture.height + (static_cast<std::uint64_t>(desc.texture.levels) << 24);
         if (selected || (source_override < 0 && score > best_score)) {
             best_source = &binding;
+            best_source_slot = slot;
             best_score = score;
             if (selected) break;
         }
@@ -947,6 +953,10 @@ void configure_d3d12_draw_state(reshade::api::command_list *command_list,
             best_source->view);
         draw.source_view = best_source->view.handle;
         draw.source_resource = source_resource.handle;
+        draw.source_descriptor_param = best_source->param;
+        draw.source_descriptor_binding = best_source->binding;
+        draw.source_descriptor_array_offset = best_source->array_offset;
+        draw.source_descriptor_type = static_cast<std::uint32_t>(best_source->type);
         {
             std::lock_guard lock(g_baker_probe_mutex);
             if (const auto known = g_resource_states.find(source_resource.handle);
@@ -954,17 +964,23 @@ void configure_d3d12_draw_state(reshade::api::command_list *command_list,
                 draw.source_usage = static_cast<std::uint32_t>(known->second);
         }
         const BakerPixelSampler *best_sampler = nullptr;
-        for (const auto &[slot, sampler] : state.pixel_samplers) {
-            (void)slot;
-            if (sampler.sampler == 0) continue;
-            if (best_sampler == nullptr ||
-                std::tie(sampler.dx_register_space, sampler.dx_register_index) <
-                    std::tie(best_sampler->dx_register_space, best_sampler->dx_register_index))
-                best_sampler = &sampler;
-            if (sampler.dx_register_index == best_source->dx_register_index &&
-                sampler.dx_register_space == best_source->dx_register_space) {
-                best_sampler = &sampler;
-                break;
+        if (const auto exact = state.pixel_samplers.find(best_source_slot);
+            exact != state.pixel_samplers.end() && exact->second.sampler != 0)
+            best_sampler = &exact->second;
+        if (best_sampler == nullptr) {
+            for (const auto &[slot, sampler] : state.pixel_samplers) {
+                (void)slot;
+                if (sampler.sampler == 0) continue;
+                if (best_sampler == nullptr ||
+                    std::tie(sampler.dx_register_space, sampler.dx_register_index) <
+                        std::tie(best_sampler->dx_register_space,
+                                 best_sampler->dx_register_index))
+                    best_sampler = &sampler;
+                if (sampler.dx_register_index == best_source->dx_register_index &&
+                    sampler.dx_register_space == best_source->dx_register_space) {
+                    best_sampler = &sampler;
+                    break;
+                }
             }
         }
         if (best_sampler != nullptr) {
@@ -993,11 +1009,6 @@ void configure_d3d12_draw_state(reshade::api::command_list *command_list,
                     }
                     if (bounded) {
                         draw.source_descriptor_table = best_source->table.handle;
-                        draw.source_descriptor_param = best_source->param;
-                        draw.source_descriptor_binding = best_source->binding;
-                        draw.source_descriptor_array_offset = best_source->array_offset;
-                        draw.source_descriptor_type =
-                            static_cast<std::uint32_t>(best_source->type);
                         draw.source_table_range_count = param.descriptor_table.count;
                         draw.source_descriptor_isolatable = true;
                     }
@@ -1007,33 +1018,6 @@ void configure_d3d12_draw_state(reshade::api::command_list *command_list,
             }
         }
     }
-    if (!state.inside_render_pass && state.render_target_count != 0 &&
-        state.render_targets[0] != 0) {
-        const auto resource = command_list->get_device()->get_resource_from_view(
-            state.render_targets[0]);
-        if (resource != 0) {
-            const auto desc = command_list->get_device()->get_resource_desc(resource);
-            draw.target_compatible = desc.type == reshade::api::resource_type::texture_2d &&
-                desc.texture.width == capture->width() &&
-                desc.texture.height == capture->height() && desc.texture.samples == 1;
-        }
-    }
-}
-
-void configure_vulkan_draw_state(reshade::api::command_list *command_list,
-                                 const BakerCommandState &state,
-                                 neuralpass::capture::SurfaceCaptureBackend *capture,
-                                 neuralpass::capture::DrawCommand &draw) {
-    if (dynamic_cast<neuralpass::vulkan_capture::SurfaceCapture *>(capture) == nullptr)
-        return;
-    draw.pipeline = state.pipeline.handle;
-    draw.pipeline_layout = state.layout.handle;
-    draw.render_target_count = state.render_target_count;
-    draw.depth_stencil_view = state.depth_stencil.handle;
-    draw.inside_render_pass = state.inside_render_pass;
-    draw.api_command_list = command_list;
-    for (std::uint32_t index = 0; index < state.render_target_count; ++index)
-        draw.render_target_views[index] = state.render_targets[index].handle;
     if (!state.inside_render_pass && state.render_target_count != 0 &&
         state.render_targets[0] != 0) {
         const auto resource = command_list->get_device()->get_resource_from_view(
@@ -1082,8 +1066,7 @@ bool on_baker_draw(reshade::api::command_list *command_list, std::uint32_t verte
         .first_vertex_or_index = first_vertex,
         .first_instance = first_instance,
     };
-    configure_d3d12_draw_state(command_list, *state, capture, draw, source_override);
-    configure_vulkan_draw_state(command_list, *state, capture, draw);
+    configure_explicit_draw_state(command_list, *state, capture, draw, source_override);
     return capture != nullptr && uv.valid() && capture->replay(
         capture_command_handle(command_list), uv, material.value,
         draw, source_override);
@@ -1120,8 +1103,7 @@ bool on_baker_draw_indexed(reshade::api::command_list *command_list,
         .vertex_offset = vertex_offset,
         .first_instance = first_instance,
     };
-    configure_d3d12_draw_state(command_list, *state, capture, draw, source_override);
-    configure_vulkan_draw_state(command_list, *state, capture, draw);
+    configure_explicit_draw_state(command_list, *state, capture, draw, source_override);
     return capture != nullptr && uv.valid() && capture->replay(
         capture_command_handle(command_list), uv, material.value,
         draw, source_override);
@@ -1164,8 +1146,7 @@ bool on_baker_draw_indirect(reshade::api::command_list *command_list,
         .draw_count = draw_count,
         .argument_stride = stride,
     };
-    configure_d3d12_draw_state(command_list, *state, capture, draw, source_override);
-    configure_vulkan_draw_state(command_list, *state, capture, draw);
+    configure_explicit_draw_state(command_list, *state, capture, draw, source_override);
     return capture->replay(capture_command_handle(command_list), uv,
                            material.value, draw, source_override);
 }

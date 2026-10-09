@@ -37,7 +37,9 @@ compatible texture/sampler pair is bound. Its bounded-table RGBA8/BGRA8
 replacement path is experimental and still needs real-game validation. A new
 Vulkan scaffold instruments a compatible vertex SPIR-V module to carry the real
 UV input into the same surface contract and uses a generic three-slot fence/readback
-ring, but still needs driver/game validation, source sampling, and replacement textures.
+ring. Combined image-sampler bindings can provide source color through the
+application's existing descriptor set; separate image/sampler bindings, driver/game
+validation, and replacement textures remain.
 
 ## Build
 
@@ -235,7 +237,7 @@ asynchronous capture, and descriptor-isolated RGBA8/BGRA8 replacement. Vulkan
 has SPIR-V vertex instrumentation, pipeline replay, and asynchronous readback, but
 accepts a draw only when it can safely identify and instrument a plain float2 UV
 input. Both explicit APIs still need real-game evidence; Vulkan also needs
-source sampling and replacement. Unsupported APIs, shader signatures, native
+separate-descriptor source sampling and replacement. Unsupported APIs, shader signatures, native
 render passes, render-target sizes, and MSAA draws retain the screen-space path
 instead of receiving guessed UV data. The canonical capture and multi-material
 baker remain API-neutral so every adapter emits the same validated surface-frame
@@ -246,7 +248,7 @@ contract.
 | D3D11 | Experimental draw replay and RGBA8/BGRA8 replacement; automated WARP coverage |
 | D3D9 / D3D10 | Adapter required |
 | D3D12 | Experimental direct/indirect PSO replay, readback, and bounded-table RGBA8/BGRA8 replacement; game validation pending |
-| Vulkan | Experimental SPIR-V UV instrumentation, replay, and asynchronous readback; no replacement or hardware/game evidence yet |
+| Vulkan | Experimental SPIR-V UV/source capture and asynchronous readback; no replacement or hardware/game evidence yet |
 
 Atlas snapshots use a versioned, checksummed `.npatlas` format. Writes create a
 new generation and rename it only after the complete payload is flushed, so an
