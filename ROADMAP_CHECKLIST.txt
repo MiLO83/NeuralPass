@@ -52,7 +52,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [x] Let later direct observations supersede inpainted texels.
     Evidence: direct-observation supersession test also verifies preserved source alpha.
 [ ] Generate mips without expanding semantic coverage into unseen regions.
-[ ] Create separate replacement textures per pipeline-plus-descriptor binding.
+[~] Create separate replacement textures per pipeline-plus-descriptor binding.
+    Evidence: canonical cross-API BindingInstanceKey now distinguishes pipeline and
+    descriptor-slot placement; GPU replacement allocation/binding remains.
 
 3. GRAPHICS API ADAPTERS
 ------------------------

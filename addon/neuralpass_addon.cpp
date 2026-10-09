@@ -4,6 +4,7 @@
 #include <descriptor_tracking.hpp>
 
 #include "d3d11_surface_capture.hpp"
+#include "neuralpass/binding_identity.hpp"
 #include "neuralpass/inference.hpp"
 #include "neuralpass/texture_baker.hpp"
 #include "neuralpass/temporal.hpp"
@@ -364,11 +365,12 @@ void on_baker_bind_pipeline(reshade::api::command_list *command_list,
 std::uint64_t descriptor_slot(reshade::api::pipeline_layout layout,
                               std::uint32_t param, std::uint32_t binding,
                               std::uint32_t array_offset) {
-    std::uint64_t value = layout.handle;
-    value ^= (static_cast<std::uint64_t>(param) << 48);
-    value ^= (static_cast<std::uint64_t>(binding) << 16);
-    value ^= array_offset;
-    return value;
+    (void)layout;
+    // Native layout handles are process-local and must never enter a cache key.
+    // The owning pipeline fingerprint distinguishes layouts; this identifies
+    // the descriptor's semantic position inside that layout.
+    return (static_cast<std::uint64_t>(param) << 48) |
+        (static_cast<std::uint64_t>(binding) << 16) | array_offset;
 }
 
 void track_pixel_descriptor(BakerCommandState &state, std::uint64_t slot,
@@ -436,17 +438,11 @@ void on_baker_bind_descriptor_tables(reshade::api::command_list *command_list,
     }
 }
 
-struct MaterialKey {
-    std::uint64_t value = 0;
-    bool restart_stable = false;
-};
-
-MaterialKey current_material_id(reshade::api::device *device,
-                                const BakerCommandState &state) {
-    std::vector<ResourceFingerprint> resources;
+neuralpass::BindingInstanceKey current_material_id(reshade::api::device *device,
+                                                   const BakerCommandState &state) {
+    std::vector<neuralpass::DescriptorIdentity> resources;
     resources.reserve(state.pixel_resources.size());
     for (const auto &[slot, handle] : state.pixel_resources) {
-        (void)slot;
         if (handle == 0) continue;
         const reshade::api::resource_view view {handle};
         const auto resource = device->get_resource_from_view(view);
@@ -475,32 +471,24 @@ MaterialKey current_material_id(reshade::api::device *device,
             // while keeping this material explicitly session-scoped.
             hash_value(fingerprint.value, resource.handle);
         }
-        resources.push_back(fingerprint);
+        resources.push_back({slot, fingerprint.value, fingerprint.content_backed});
     }
     if (resources.empty()) return {};
-    std::sort(resources.begin(), resources.end(), [](const auto &left, const auto &right) {
-        return left.value < right.value;
-    });
-    resources.erase(std::unique(resources.begin(), resources.end(), [](const auto &left, const auto &right) {
-        return left.value == right.value;
-    }), resources.end());
     g_material_texture_candidates += resources.size();
-    std::uint64_t hash = k_fnv_offset;
-    bool stable_pipeline = false;
+    std::vector<std::uint64_t> pipelines;
+    bool complete_pipeline = true;
     {
         std::lock_guard lock(g_baker_probe_mutex);
         for (const auto pipeline : {state.pipeline, state.vertex_pipeline, state.pixel_pipeline}) {
+            if (pipeline == 0) continue;
             const auto known = g_pipeline_fingerprints.find(pipeline.handle);
             if (known != g_pipeline_fingerprints.end()) {
-                hash_value(hash, known->second);
-                stable_pipeline = true;
-            }
+                pipelines.push_back(known->second);
+            } else complete_pipeline = false;
         }
     }
-    const bool stable_resources = std::all_of(resources.begin(), resources.end(),
-        [](const auto &fingerprint) { return fingerprint.content_backed; });
-    for (const auto &fingerprint : resources) hash_value(hash, fingerprint.value);
-    return {hash == 0 ? 1 : hash, stable_pipeline && stable_resources};
+    complete_pipeline = complete_pipeline && !pipelines.empty();
+    return neuralpass::make_binding_instance_key(pipelines, resources, complete_pipeline);
 }
 
 void on_baker_bind_vertex_buffers(reshade::api::command_list *command_list,
@@ -612,9 +600,10 @@ void probe_pretransform_buffer(reshade::api::command_list *command_list,
     command_list->get_device()->unmap_buffer_region(binding.buffer);
 }
 
-MaterialKey record_baker_draw(reshade::api::command_list *command_list,
-                              std::uint32_t vertex_or_index_count,
-                              std::uint32_t instance_count) {
+neuralpass::BindingInstanceKey record_baker_draw(
+    reshade::api::command_list *command_list,
+    std::uint32_t vertex_or_index_count,
+    std::uint32_t instance_count) {
     ++g_draws_seen;
     const auto *state = command_list->get_private_data<BakerCommandState>();
     if (!state) return {};

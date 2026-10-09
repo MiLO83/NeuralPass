@@ -1,4 +1,5 @@
 #include "neuralpass/temporal.hpp"
+#include "neuralpass/binding_identity.hpp"
 #include "neuralpass/tile_scheduler.hpp"
 #include "neuralpass/inference.hpp"
 #include "neuralpass/surface_capture.hpp"
@@ -98,6 +99,35 @@ static void test_preview_backend_is_bounded() {
     for (const auto &pixel : output.pixels())
         require(pixel.r >= 0.0f && pixel.r <= 1.0f && pixel.g >= 0.0f && pixel.g <= 1.0f &&
                 pixel.b >= 0.0f && pixel.b <= 1.0f, "preview produced an invalid color");
+}
+
+static void test_binding_identity_is_pipeline_and_slot_specific() {
+    const std::array<std::uint64_t, 2> pipeline {100, 200};
+    const std::array<DescriptorIdentity, 2> descriptors {{
+        {3, 1001, true}, {7, 1002, true},
+    }};
+    const std::array<DescriptorIdentity, 2> reordered {{
+        {7, 1002, true}, {3, 1001, true},
+    }};
+    const std::array<DescriptorIdentity, 2> swapped_slots {{
+        {3, 1002, true}, {7, 1001, true},
+    }};
+    const std::array<std::uint64_t, 2> other_pipeline {100, 201};
+    const auto key = make_binding_instance_key(pipeline, descriptors, true);
+    require(key.valid() && key.restart_stable,
+            "complete content-backed binding did not produce a stable key");
+    require(make_binding_instance_key(pipeline, reordered, true).value == key.value,
+            "descriptor enumeration order changed binding identity");
+    require(make_binding_instance_key(pipeline, swapped_slots, true).value != key.value,
+            "different descriptor placement shared a binding identity");
+    require(make_binding_instance_key(other_pipeline, descriptors, true).value != key.value,
+            "different pipelines shared a binding identity");
+    require(!make_binding_instance_key(pipeline, descriptors, false).restart_stable,
+            "incomplete pipeline identity was marked restart-stable");
+    auto transient = descriptors;
+    transient[0].restart_stable = false;
+    require(!make_binding_instance_key(pipeline, transient, true).restart_stable,
+            "transient descriptor identity was marked restart-stable");
 }
 
 static void test_texture_baker_splats_inpaints_and_reconstructs() {
@@ -414,6 +444,7 @@ int main() {
         test_dilation_and_priority();
         test_age_refresh();
         test_preview_backend_is_bounded();
+        test_binding_identity_is_pipeline_and_slot_specific();
         test_texture_baker_splats_inpaints_and_reconstructs();
         test_texture_baker_locks_observed_texels_and_rejects_bad_depth();
         test_material_baker_handles_sparse_multiple_materials();
