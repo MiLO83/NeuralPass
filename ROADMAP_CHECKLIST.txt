@@ -37,7 +37,10 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [~] Raymarch visibility using engine motion, camera inference, then optical flow.
     Evidence: conservative hierarchical projected-segment validator and occlusion tests;
     ordered motion-source integration remains.
-[ ] Classify known, disoccluded, newly front-facing, off-screen-entry, and unsupported samples.
+[~] Classify known, disoccluded, newly front-facing, off-screen-entry, first-observation,
+    and unsupported samples.
+    Evidence: backend-neutral dense classifier tests every cause and camera-cut reset;
+    live motion/depth adapter feeds remain.
 [ ] Add manual Keep current scene, Start new scene, and Merge scene controls.
 [ ] Prove that uncertain scene classification commits no texture data.
 

@@ -16,6 +16,7 @@ add_library(neuralpass_core STATIC
     src/temporal.cpp
     src/texture_baker.cpp
     src/tile_scheduler.cpp)
+target_sources(neuralpass_core PRIVATE src/visibility.cpp)
 target_include_directories(neuralpass_core PUBLIC include)
 target_compile_features(neuralpass_core PUBLIC cxx_std_20)
 if(MSVC)

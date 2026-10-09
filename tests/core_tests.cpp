@@ -6,6 +6,7 @@
 #include "neuralpass/scene_cache.hpp"
 #include "neuralpass/surface_capture.hpp"
 #include "neuralpass/texture_baker.hpp"
+#include "neuralpass/visibility.hpp"
 
 #include <algorithm>
 #include <array>
@@ -154,6 +155,41 @@ static void test_depth_pyramid_and_conservative_raymarch() {
     require(!depth_segment_visible(pyramid, -1.0f, 0.0f, 5.0f,
                                    7.0f, 0.0f, 5.0f),
             "out-of-bounds raymarch endpoint was accepted");
+}
+
+static void test_visibility_classifies_newly_revealed_causes() {
+    SurfaceCaptureFrame previous(6, 1, 1);
+    SurfaceCaptureFrame current(6, 1, 2);
+    previous.pixels().at(0, 0) = {1, 0.1f, 0.2f, 4.0f, 4.0f, 1.0f};
+    current.pixels().at(0, 0) = {1, 0.1f, 0.2f, 4.0f, 4.0f, 1.0f};
+    previous.pixels().at(1, 0) = {9, 0.4f, 0.4f, 2.0f, 2.0f, 1.0f};
+    current.pixels().at(1, 0) = {2, 0.3f, 0.3f, 5.0f, 5.0f, 1.0f};
+    current.pixels().at(2, 0) = {3, 0.8f, 0.8f,
+        std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), 1.0f};
+    current.pixels().at(3, 0) = {4, 0.2f, 0.2f, 3.0f, 3.0f, 1.0f};
+    current.pixels().at(4, 0) = {5, 0.2f, 0.2f,
+        std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), 1.0f};
+    previous.pixels().at(5, 0) = {3, 0.1f, 0.1f, 3.0f, 3.0f, 1.0f};
+    Image<Motion> motion(6, 1, {});
+    motion.at(3, 0) = {10.0f, 0.0f};
+    const auto classes = classify_visibility(current, &previous, &motion);
+    require(classes.pixels.at(0, 0) == VisibilityClass::known_visible &&
+            classes.pixels.at(1, 0) == VisibilityClass::disoccluded &&
+            classes.pixels.at(2, 0) == VisibilityClass::newly_front_facing &&
+            classes.pixels.at(3, 0) == VisibilityClass::offscreen_entry &&
+            classes.pixels.at(4, 0) == VisibilityClass::first_observation &&
+            classes.pixels.at(5, 0) == VisibilityClass::unsupported,
+            "visibility causes were not classified independently");
+    require(classes.count(VisibilityClass::known_visible) == 1 &&
+            classes.count(VisibilityClass::unsupported) == 1,
+            "visibility classification counts are incorrect");
+
+    const auto after_cut = classify_visibility(current, nullptr, nullptr);
+    require(after_cut.count(VisibilityClass::first_observation) == 5 &&
+            after_cut.count(VisibilityClass::unsupported) == 1,
+            "camera-cut classification reused previous-frame visibility");
 }
 
 static void test_texture_baker_splats_inpaints_and_reconstructs() {
@@ -540,6 +576,7 @@ int main() {
         test_preview_backend_is_bounded();
         test_binding_identity_is_pipeline_and_slot_specific();
         test_depth_pyramid_and_conservative_raymarch();
+        test_visibility_classifies_newly_revealed_causes();
         test_texture_baker_splats_inpaints_and_reconstructs();
         test_texture_baker_locks_observed_texels_and_rejects_bad_depth();
         test_elliptical_uv_splat_uses_gradients_and_confidence();
