@@ -51,7 +51,15 @@ private:
 enum class SceneTransition {
     stable,
     camera_cut,
+    pending_scene_change,
     scene_change,
+};
+
+struct SceneKey {
+    std::uint64_t generation = 1;
+
+    [[nodiscard]] bool valid() const noexcept { return generation != 0; }
+    bool operator==(const SceneKey &) const = default;
 };
 
 struct SceneTransitionSettings {
@@ -60,9 +68,10 @@ struct SceneTransitionSettings {
 };
 
 // Combines an immediate image-space cut signal with stable material identity.
-// Every visual cut invalidates temporal reprojection, but a scene cache is only
-// replaced after multiple frames contain no meaningful overlap with the known
-// scene. With no material capture, it conservatively reports a camera cut.
+// Every visual cut invalidates temporal reprojection. Foreign cuts enter a
+// quarantined pending state so observations cannot contaminate either scene;
+// the cache is replaced only after multiple frames confirm a new identity.
+// With no material capture, it conservatively reports a camera cut.
 class SceneTransitionTracker {
 public:
     explicit SceneTransitionTracker(SceneTransitionSettings settings = {});
@@ -70,6 +79,7 @@ public:
     [[nodiscard]] SceneTransition observe(
         bool visual_cut,
         std::span<const SurfaceCorrespondence> correspondence);
+    [[nodiscard]] SceneKey scene_key() const noexcept { return scene_key_; }
     void reset();
 
 private:
@@ -79,6 +89,7 @@ private:
     std::unordered_set<std::uint64_t> scene_materials_;
     std::unordered_set<std::uint64_t> candidate_materials_;
     std::uint32_t foreign_frames_ = 0;
+    SceneKey scene_key_;
 };
 
 } // namespace neuralpass

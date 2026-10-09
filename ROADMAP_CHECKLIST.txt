@@ -1,0 +1,120 @@
+NEURALPASS PRODUCTION COMPLETION CHECKLIST
+==========================================
+
+Status: [ ] not started, [~] in progress, [x] verified, [!] external blocker
+Rule: An item receives [x] only with a passing test, commit, or release artifact.
+
+0. VERIFIED FOUNDATIONS
+-----------------------
+[x] Public GitHub repository and baseline CI.
+    Evidence: commits dd0fa79 and ef91144; Linux and Windows GitHub CI passed.
+[x] Temporal rejection, dirty-tile scheduling, and bounded asynchronous worker.
+    Evidence: neuralpass_core tests.
+[x] Versioned, checksummed persistent material atlas cache.
+    Evidence: atlas round-trip and corruption-isolation tests.
+[x] Reveal-only bake planning and stale-result rejection.
+    Evidence: core reveal/epoch tests.
+[x] Experimental D3D11 mesh-UV capture.
+    Evidence: D3D11 WARP indexed/non-indexed capture and state-restoration test.
+[~] Production D3D11 hardening and real-game validation.
+
+1. SCENE AND VISIBILITY SYSTEM
+------------------------------
+[~] Add stable SceneKey and generation tokens.
+    Evidence: runtime SceneKey generation advances only on confirmed scene changes/reset;
+    core transition tests and Windows add-on build pass. Persistent scene identity remains.
+[x] Quarantine ambiguous cuts until same-scene/new-scene classification resolves.
+    Evidence: pending-scene transition/recovery tests and Windows add-on build.
+[x] Preserve atlases across same-scene camera cuts and bake newly visible UVs.
+    Evidence: dedicated camera-cut atlas/reveal test and Windows add-on build.
+[ ] Combine binding, material, geometry, UV, depth, and color evidence for scene identity.
+[ ] Capture UV gradients, linear depth, motion, and confidence for every supported adapter.
+[ ] Build hierarchical current/previous depth pyramids.
+[ ] Raymarch visibility using engine motion, camera inference, then optical flow.
+[ ] Classify known, disoccluded, newly front-facing, off-screen-entry, and unsupported samples.
+[ ] Add manual Keep current scene, Start new scene, and Merge scene controls.
+[ ] Prove that uncertain scene classification commits no texture data.
+
+2. TEXTURE-SPACE SPLATTING
+--------------------------
+[x] Bootstrap visible material texels from direct styled observations.
+    Evidence: reveal-only bake-plan tests.
+[x] Schedule all currently visible uncovered UV texels for generation.
+    Evidence: MaterialTextureBaker::plan and core reveal tests.
+[x] Never generate atlas texels that have no visible screen correspondence.
+    Evidence: commit accepts only reveal-mask correspondences.
+[ ] Convert styled framebuffer appearance into a linear source-texture transfer.
+[ ] Implement confidence-weighted elliptical UV splatting.
+[ ] Isolate UV islands, overlapping layers, bindings, and materials.
+[ ] Preserve source alpha and original pixels outside style coverage.
+[ ] Track original, direct-observation, and newly-visible-inpaint coverage.
+[ ] Let later direct observations supersede inpainted texels.
+[ ] Generate mips without expanding semantic coverage into unseen regions.
+[ ] Create separate replacement textures per pipeline-plus-descriptor binding.
+
+3. GRAPHICS API ADAPTERS
+------------------------
+[ ] Production D3D9 x86/x64 capture and replacement.
+[ ] Production D3D10 x86/x64 capture and replacement.
+[~] Production D3D11 x86/x64 capture and replacement.
+[ ] Production D3D12 x64 capture and replacement.
+[ ] Production Vulkan x86/x64 capture and replacement.
+[ ] Support indexed, non-indexed, instanced, and indirect draws.
+[ ] Restore every touched pipeline, descriptor, target, depth, UAV, and dynamic state.
+[ ] Implement aggressive base-color binding selection and manual correction.
+[ ] Add per-binding circuit breakers and accurate unsupported-path reporting.
+
+4. MANAGED NEURAL RUNTIME
+-------------------------
+[ ] Replace the WSL filesystem bridge with NeuralPassWorker.exe.
+[ ] Add versioned named-pipe control and bounded shared-memory transport.
+[ ] Reject stale scene, style, binding, and request generations.
+[ ] Support ONNX Runtime DirectML on NVIDIA, AMD, and Intel.
+[ ] Add optional CUDA acceleration.
+[!] Restore and verify the current StreamDiffusion environment.
+    Blocker: the moved WSL environment is missing torch and onnxruntime packages.
+[ ] Separate first-observation styling and newly-visible inpainting masks.
+[ ] Add global prompt and per-binding controls.
+[ ] Add adaptive frame-time/GPU-headroom control and worker crash recovery.
+[ ] Pin model versions, licenses, and SHA-256 hashes.
+
+5. PERSISTENCE AND MIGRATION
+----------------------------
+[ ] Namespace caches by game build, scene, style, model, binding, source, and UV topology.
+[ ] Double-buffer style generations during prompt/model changes.
+[ ] Migrate compatible identities and coverage after game updates.
+[ ] Quarantine ambiguous migrations for manual reassignment.
+[x] Recover from interrupted/corrupt atlas writes.
+    Evidence: checked snapshot format and corruption-isolation test.
+[ ] Add per-binding, per-scene, and global cache controls.
+
+6. INSTALLER, SAFETY, AND DOCUMENTATION
+---------------------------------------
+[ ] Build x86/x64 installer, updater, diagnostics, model manager, and uninstaller.
+[ ] Detect target API, ReShade support, GPU provider, HDR mode, and worker health.
+[ ] Require explicit per-game activation.
+[ ] Refuse known anti-cheat and protected multiplayer environments.
+[ ] Produce reproducible artifacts, checksums, SBOM, and provenance.
+[!] Obtain public-trust Authenticode signing.
+    Blocker: SignPath Foundation approval or Microsoft Artifact Signing identity setup.
+[ ] Publish complete installation, troubleshooting, architecture, and compatibility docs.
+[ ] Publish signed GitHub releases and documentation site.
+
+7. ACCEPTANCE AND RELEASE
+-------------------------
+[ ] Moving occluder inpaints only newly visible UV texels.
+[ ] Camera rotation/off-screen entry fills newly visible texels in the same scene.
+[ ] Same-scene hard cuts preserve atlases; new-scene cuts isolate generations.
+[ ] Returning views reuse established coverage without regeneration.
+[ ] Permanently invisible texels remain identical to the source.
+[ ] Direct observations replace earlier inpainted texels.
+[ ] Shared sources with distinct bindings receive separate replacements.
+[ ] UV seams, overlapping UVs, alpha cutouts, HDR, and depth conflicts remain isolated.
+[ ] D3D9 reference, D3D10/11/12 WARP, and Vulkan SwiftShader suites pass.
+[ ] Resize, device-loss, corrupt-cache, and worker-restart tests pass.
+[ ] Steel Nomad D3D12 stress validation passes.
+[ ] Each API completes a 60-minute soak without crash or device removal.
+[ ] Clean-machine install, update, removal, and signature verification pass.
+[ ] GitHub Windows/Linux x86/x64 CI is green.
+[ ] No open severity-1 or severity-2 defects.
+[ ] Signed v1.0 release published.

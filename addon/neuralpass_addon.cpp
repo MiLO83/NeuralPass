@@ -1003,6 +1003,7 @@ void process_frames(RuntimeState *state, std::stop_token token) {
     }
     struct BridgeBakeContext {
         std::uint64_t sequence = 0;
+        neuralpass::SceneKey scene;
         std::uint32_t width = 0;
         std::uint32_t height = 0;
         neuralpass::MaterialTextureBakePlan plan;
@@ -1024,7 +1025,7 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             state->has_pending = false;
         }
         const Image<Color> current = unpack(frame);
-        const auto correspondence = surface && surface->width() == frame.width &&
+        auto correspondence = surface && surface->width() == frame.width &&
                 surface->height() == frame.height
             ? surface->correspondences() : std::vector<neuralpass::SurfaceCorrespondence> {};
         HistoryFrame cut_reference;
@@ -1041,9 +1042,17 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             }
             (void)material_baker.save_cache(atlas_directory, stable);
             material_baker.reset_scene();
-        } else if (transition == neuralpass::SceneTransition::camera_cut) {
+            bridge_bake.reset();
+        } else if (transition == neuralpass::SceneTransition::camera_cut ||
+                   transition == neuralpass::SceneTransition::pending_scene_change) {
             material_baker.invalidate_in_flight();
+            bridge_bake.reset();
         }
+        // A foreign cut is deliberately quarantined: screen-space output may
+        // continue, but no UV observation is allowed to read or mutate either
+        // scene's persistent atlases until identity resolves.
+        if (transition == neuralpass::SceneTransition::pending_scene_change)
+            correspondence.clear();
         if (state->stream_bridge.load()) {
             auto current_plan = material_baker.plan(current, correspondence);
             const auto seeded = pack(current_plan.composite);
@@ -1080,7 +1089,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
                     state->bridge_received = received;
                     // The motion mailbox will immediately warp this new anchor. Publish only
                     // the final diffusion result as a fallback, never the old RIFE burst.
-                    if (!results.empty() && bridge_bake && bridge_bake->sequence == sent) {
+                    if (!results.empty() && bridge_bake && bridge_bake->sequence == sent &&
+                        bridge_bake->scene == scene_transitions.scene_key()) {
                         auto generated = resize_nearest(results.back(), bridge_bake->width,
                                                         bridge_bake->height);
                         auto generated_image = unpack(generated);
@@ -1100,7 +1110,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
                 const auto sequence = std::max<std::uint64_t>(GetTickCount64(), sent + 1);
                 if (write_bridge_frame(resized, sequence)) {
                     state->bridge_sent = sequence;
-                    bridge_bake = BridgeBakeContext {sequence, frame.width, frame.height,
+                    bridge_bake = BridgeBakeContext {sequence, scene_transitions.scene_key(),
+                        frame.width, frame.height,
                         std::move(current_plan), correspondence};
                 }
             }
@@ -1116,8 +1127,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         }
         if (state->reset_requested.exchange(false)) history = {};
         const bool sticky_history = state->sticky_history.load();
-        const bool reset = history.source.width() != frame.width || history.source.height() != frame.height ||
-                           (!sticky_history && visual_cut);
+        const bool reset = history.source.width() != frame.width ||
+                           history.source.height() != frame.height || visual_cut;
         if (reset) {
             history.source = current;
             history.styled = current;

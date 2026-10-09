@@ -6,6 +6,15 @@
 
 namespace neuralpass {
 
+namespace {
+
+void advance(SceneKey &key) noexcept {
+    ++key.generation;
+    if (key.generation == 0) key.generation = 1;
+}
+
+} // namespace
+
 std::vector<SurfaceCorrespondence> SurfaceCaptureFrame::correspondences(
     float minimum_confidence) const {
     std::vector<SurfaceCorrespondence> result;
@@ -68,7 +77,9 @@ SceneTransition SceneTransitionTracker::observe(
         foreign_frames_ = related || visible.empty() ? 0u : 1u;
         candidate_materials_ = related ? std::unordered_set<std::uint64_t> {} : visible;
         if (related) scene_materials_.insert(visible.begin(), visible.end());
-        return SceneTransition::camera_cut;
+        return foreign_frames_ == 0
+            ? SceneTransition::camera_cut
+            : SceneTransition::pending_scene_change;
     }
 
     if (foreign_frames_ != 0) {
@@ -76,17 +87,18 @@ SceneTransition SceneTransitionTracker::observe(
             foreign_frames_ = 0;
             candidate_materials_.clear();
             scene_materials_.insert(visible.begin(), visible.end());
-            return SceneTransition::stable;
+            return SceneTransition::camera_cut;
         }
-        if (visible.empty()) return SceneTransition::stable;
+        if (visible.empty()) return SceneTransition::pending_scene_change;
         candidate_materials_.insert(visible.begin(), visible.end());
         if (++foreign_frames_ >= settings_.scene_change_confirmation_frames) {
             scene_materials_ = std::move(candidate_materials_);
             candidate_materials_.clear();
             foreign_frames_ = 0;
+            advance(scene_key_);
             return SceneTransition::scene_change;
         }
-        return SceneTransition::stable;
+        return SceneTransition::pending_scene_change;
     }
 
     if (related) scene_materials_.insert(visible.begin(), visible.end());
@@ -97,6 +109,7 @@ void SceneTransitionTracker::reset() {
     scene_materials_.clear();
     candidate_materials_.clear();
     foreign_frames_ = 0;
+    advance(scene_key_);
 }
 
 } // namespace neuralpass

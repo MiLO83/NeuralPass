@@ -17,6 +17,8 @@ jobs:
           python-version: "3.12"
       - name: Validate model manifest
         run: python tools/validate_manifest.py
+      - name: Validate completion checklist
+        run: python tools/validate_checklist.py
       - name: Configure
         run: cmake -S . -B build -DNEURALPASS_BUILD_ADDON=OFF
       - name: Build

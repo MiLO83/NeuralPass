@@ -263,23 +263,73 @@ static void test_scene_transition_preserves_camera_cuts_and_confirms_new_scenes(
     }};
     require(tracker.observe(false, room) == SceneTransition::stable,
             "first scene was not initialized as stable");
+    const auto room_key = tracker.scene_key();
     require(tracker.observe(true, room) == SceneTransition::camera_cut,
             "visual cut with shared materials was not classified as a camera cut");
+    require(tracker.scene_key() == room_key,
+            "same-scene camera cut changed the scene generation");
 
     const std::array<SurfaceCorrespondence, 2> other {{
         {0, 0, 9001, 0.1f, 0.1f, 1.0f},
         {1, 0, 9002, 0.2f, 0.2f, 1.0f},
     }};
-    require(tracker.observe(true, other) == SceneTransition::camera_cut,
-            "foreign cut cleared the scene cache before confirmation");
-    require(tracker.observe(false, other) == SceneTransition::stable,
-            "foreign scene was confirmed too early");
+    require(tracker.observe(true, other) == SceneTransition::pending_scene_change,
+            "foreign cut was not quarantined before confirmation");
+    require(tracker.observe(false, other) == SceneTransition::pending_scene_change,
+            "foreign scene left quarantine before confirmation");
     require(tracker.observe(false, other) == SceneTransition::scene_change,
             "sustained foreign materials did not confirm a scene change");
+    require(tracker.scene_key() != room_key,
+            "confirmed new scene retained the old scene generation");
+
+    SceneTransitionTracker recovered({.material_overlap_threshold=0.25f,
+                                      .scene_change_confirmation_frames=3});
+    require(recovered.observe(false, room) == SceneTransition::stable,
+            "recovery fixture did not establish its scene");
+    require(recovered.observe(true, other) == SceneTransition::pending_scene_change,
+            "recovery fixture did not enter quarantine");
+    require(recovered.observe(false, room) == SceneTransition::camera_cut,
+            "returning same-scene materials did not resolve as a camera cut");
 
     SceneTransitionTracker no_geometry;
+    const auto before_reset = no_geometry.scene_key();
     require(no_geometry.observe(true, {}) == SceneTransition::camera_cut,
             "capture-less visual cut was not handled conservatively");
+    no_geometry.reset();
+    require(no_geometry.scene_key() != before_reset,
+            "explicit scene reset did not advance the scene generation");
+}
+
+static void test_same_scene_camera_cut_preserves_atlas_and_reveals_new_uvs() {
+    MaterialTextureBaker baker({.atlas_width=32, .atlas_height=16});
+    SceneTransitionTracker tracker({.material_overlap_threshold=0.25f,
+                                    .scene_change_confirmation_frames=3});
+    Image<Color> styled(2, 1);
+    styled.at(0, 0) = {0.9f, 0.1f, 0.1f, 1.0f};
+    styled.at(1, 0) = {0.1f, 0.2f, 0.9f, 1.0f};
+    const std::array<SurfaceCorrespondence, 1> first {{
+        {0, 0, 5001, 0.15f, 0.5f, 1.0f},
+    }};
+    require(tracker.observe(false, first) == SceneTransition::stable,
+            "camera-cut fixture did not establish its scene");
+    const auto first_plan = baker.plan(styled, first);
+    require(baker.commit(first_plan, styled, first).accepted == 1,
+            "camera-cut fixture did not establish atlas coverage");
+
+    const std::array<SurfaceCorrespondence, 2> changed_angle {{
+        {0, 0, 5001, 0.15f, 0.5f, 1.0f},
+        {1, 0, 5001, 0.85f, 0.5f, 1.0f},
+    }};
+    require(tracker.observe(true, changed_angle) == SceneTransition::camera_cut,
+            "shared material identity was not retained across a camera cut");
+    baker.invalidate_in_flight();
+    const auto changed_plan = baker.plan(styled, changed_angle);
+    require(changed_plan.known_pixels == 1 && changed_plan.revealed_pixels == 1 &&
+            changed_plan.reveal_mask.at(0, 0) == 0 &&
+            changed_plan.reveal_mask.at(1, 0) == 255,
+            "camera cut did not preserve known UVs and reveal only the new angle");
+    require(baker.commit(changed_plan, styled, changed_angle).accepted == 1,
+            "newly visible same-scene UV was not accepted after a camera cut");
 }
 
 static void test_atlas_cache_round_trip_and_rejects_corruption() {
@@ -345,6 +395,7 @@ int main() {
         test_baker_plans_only_newly_revealed_texels_and_rejects_cut_results();
         test_surface_capture_compacts_backend_neutral_pixels();
         test_scene_transition_preserves_camera_cuts_and_confirms_new_scenes();
+        test_same_scene_camera_cut_preserves_atlas_and_reveals_new_uvs();
         test_atlas_cache_round_trip_and_rejects_corruption();
         std::cout << "NeuralPass core tests passed\n";
         return EXIT_SUCCESS;
