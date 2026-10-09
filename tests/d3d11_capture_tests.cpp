@@ -50,7 +50,7 @@ void test_triangle_replay_produces_material_uv() {
     constexpr char vertex_source[] =
         "struct Input { float2 position : POSITION; float2 uv : TEXCOORD0; };"
         "struct Output { float4 position : SV_Position; float2 uv : TEXCOORD0; };"
-        "Output main(Input input) { Output o; o.position=float4(input.position,0,1);"
+        "Output main(Input input) { Output o; o.position=float4(input.position,0.5,1);"
         "o.uv=input.uv; return o; }";
     constexpr char pixel_source[] =
         "float4 main(float2 uv : TEXCOORD0) : SV_Target { return float4(uv,0,1); }";
@@ -250,6 +250,10 @@ void test_triangle_replay_produces_material_uv() {
             std::abs(center.du_dx) + std::abs(center.du_dy) +
                 std::abs(center.dv_dx) + std::abs(center.dv_dy) > 0.01f,
         "captured UV gradients are invalid");
+    require(std::isfinite(center.framebuffer_depth) && std::isfinite(center.hit_depth) &&
+            std::abs(center.framebuffer_depth - 0.5f) < 0.001f &&
+            std::abs(center.hit_depth - center.framebuffer_depth) < 0.0001f,
+        "captured device-depth correspondence is invalid");
     require(std::isfinite(center.source_r) && std::isfinite(center.source_g) &&
             std::isfinite(center.source_b) && std::isfinite(center.source_a) &&
             std::abs(center.source_r - 16.0f/255.0f) < 0.01f &&

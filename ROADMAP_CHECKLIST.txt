@@ -29,8 +29,8 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     Evidence: dedicated camera-cut atlas/reveal test and Windows add-on build.
 [ ] Combine binding, material, geometry, UV, depth, and color evidence for scene identity.
 [~] Capture UV gradients, linear depth, motion, and confidence for every supported adapter.
-    Evidence: D3D11 second-MRT UV-gradient/confidence capture passes WARP;
-    linear depth, motion, and the other API adapters remain.
+    Evidence: D3D11 captures UV gradients/confidence plus equal-tested device depth
+    and passes WARP; view-space linearization, motion, and other adapters remain.
 [~] Build hierarchical current/previous depth pyramids.
     Evidence: backend-neutral conservative min/max hierarchy and dimension/bounds tests;
     live adapters still need linear-depth feeds for both frames.

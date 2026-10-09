@@ -65,7 +65,10 @@ to avoid leaking a correction to an unrelated resource after restart. The replay
 slot when an override is active and emits no source observation if that slot is
 not a compatible texture/sampler pair. Fully transparent samples are discarded
 from all capture targets so a common base-color-alpha cutout cannot become a
-texture bake observation.
+texture bake observation. A fourth target records `SV_Position.z` only for
+fragments that pass the original depth surface with an equal-depth replay; this
+provides matched device-depth evidence, while view-space linearization still
+requires projection metadata from the adapter.
 
 The local/world RGB8 planes produced by the StreamDiffusion bridge are optical-
 flow coordinates into a prior screen image. They stabilize live generation but

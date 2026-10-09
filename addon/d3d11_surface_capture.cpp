@@ -55,6 +55,7 @@ struct ReadbackSlot {
     ID3D11Texture2D *texture = nullptr;
     ID3D11Texture2D *gradients = nullptr;
     ID3D11Texture2D *source = nullptr;
+    ID3D11Texture2D *depth = nullptr;
     ID3D11Query *query = nullptr;
     bool in_flight = false;
     std::uint64_t frame_index = 0;
@@ -159,6 +160,8 @@ struct SurfaceCapture::Impl {
     ID3D11RenderTargetView *gradient_target_view = nullptr;
     ID3D11Texture2D *source_target = nullptr;
     ID3D11RenderTargetView *source_target_view = nullptr;
+    ID3D11Texture2D *depth_target = nullptr;
+    ID3D11RenderTargetView *depth_target_view = nullptr;
     std::array<ReadbackSlot, 3> readback;
     std::unordered_map<ShaderKey, ID3D11PixelShader *, ShaderKeyHash> shaders;
     std::unordered_map<ID3D11DepthStencilState *, DepthVariant> depth_variants;
@@ -191,13 +194,14 @@ struct SurfaceCapture::Impl {
         source << "struct Input { float4 position : SV_Position; float2 uv : "
                << uv.name << uv.index << "; };\n"
                << "struct Output { uint4 surface : SV_Target0; float4 gradients : SV_Target1; "
-               << "float4 source : SV_Target2; };\n"
+               << "float4 source : SV_Target2; float depth : SV_Target3; };\n"
                << "Output main(Input input) { Output output; output.surface = uint4("
                << static_cast<std::uint32_t>(material_id) << "u,"
                << static_cast<std::uint32_t>(material_id >> 32) << "u,"
                << "asuint(input.uv.x),asuint(input.uv.y)); "
                << "float2 dx = ddx(input.uv); float2 dy = ddy(input.uv); "
                << "output.gradients = float4(dx.x,dy.x,dx.y,dy.y); "
+               << "output.depth = input.position.z; "
                << (source_binding.valid()
                     ? "output.source = source_texture.Sample(source_sampler,input.uv); "
                       "clip(output.source.a - (0.5f/255.0f)); "
@@ -311,6 +315,7 @@ struct SurfaceCapture::Impl {
             context->ClearRenderTargetView(target_view, k_clear.data());
             context->ClearRenderTargetView(gradient_target_view, k_clear.data());
             context->ClearRenderTargetView(source_target_view, k_missing_source.data());
+            context->ClearRenderTargetView(depth_target_view, k_missing_source.data());
             target_cleared = true;
         }
         std::uint32_t uav_count = 0;
@@ -335,9 +340,9 @@ struct SurfaceCapture::Impl {
         auto *capture_shader = shader(uv, material_id, source_binding);
         auto *capture_depth_state = capture_depth(original_depth);
         if (capture_shader != nullptr && (original_depth == nullptr || capture_depth_state != nullptr)) {
-            ID3D11RenderTargetView *capture_targets[3] {
-                target_view, gradient_target_view, source_target_view};
-            context->OMSetRenderTargets(3, capture_targets, dsv);
+            ID3D11RenderTargetView *capture_targets[4] {
+                target_view, gradient_target_view, source_target_view, depth_target_view};
+            context->OMSetRenderTargets(4, capture_targets, dsv);
             context->OMSetBlendState(nullptr, nullptr, UINT_MAX);
             context->OMSetDepthStencilState(capture_depth_state, stencil_reference);
             context->PSSetShader(capture_shader, nullptr, 0);
@@ -381,6 +386,7 @@ struct SurfaceCapture::Impl {
             release(slot.texture);
             release(slot.gradients);
             release(slot.source);
+            release(slot.depth);
             release(slot.query);
         }
         release(target_view);
@@ -389,6 +395,8 @@ struct SurfaceCapture::Impl {
         release(gradient_target);
         release(source_target_view);
         release(source_target);
+        release(depth_target_view);
+        release(depth_target);
         release(device);
     }
 };
@@ -464,6 +472,15 @@ bool SurfaceCapture::initialize(ID3D11Device *device, std::uint32_t width,
         delete implementation;
         return false;
     }
+    D3D11_TEXTURE2D_DESC depth_desc = target_desc;
+    depth_desc.Format = DXGI_FORMAT_R32_FLOAT;
+    if (FAILED(device->CreateTexture2D(&depth_desc, nullptr,
+                                      &implementation->depth_target)) ||
+        FAILED(device->CreateRenderTargetView(implementation->depth_target, nullptr,
+                                              &implementation->depth_target_view))) {
+        delete implementation;
+        return false;
+    }
     D3D11_TEXTURE2D_DESC staging_desc = target_desc;
     staging_desc.Usage = D3D11_USAGE_STAGING;
     staging_desc.BindFlags = 0;
@@ -477,10 +494,15 @@ bool SurfaceCapture::initialize(ID3D11Device *device, std::uint32_t width,
     source_staging.Usage = D3D11_USAGE_STAGING;
     source_staging.BindFlags = 0;
     source_staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    D3D11_TEXTURE2D_DESC depth_staging = depth_desc;
+    depth_staging.Usage = D3D11_USAGE_STAGING;
+    depth_staging.BindFlags = 0;
+    depth_staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
     for (auto &slot : implementation->readback) {
         if (FAILED(device->CreateTexture2D(&staging_desc, nullptr, &slot.texture)) ||
             FAILED(device->CreateTexture2D(&gradient_staging, nullptr, &slot.gradients)) ||
             FAILED(device->CreateTexture2D(&source_staging, nullptr, &slot.source)) ||
+            FAILED(device->CreateTexture2D(&depth_staging, nullptr, &slot.depth)) ||
             FAILED(device->CreateQuery(&query_desc, &slot.query))) {
             delete implementation;
             return false;
@@ -545,9 +567,11 @@ std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
         D3D11_MAPPED_SUBRESOURCE mapped {};
         D3D11_MAPPED_SUBRESOURCE gradient_mapped {};
         D3D11_MAPPED_SUBRESOURCE source_mapped {};
+        D3D11_MAPPED_SUBRESOURCE depth_mapped {};
         if (SUCCEEDED(context->Map(slot.texture, 0, D3D11_MAP_READ, 0, &mapped)) &&
             SUCCEEDED(context->Map(slot.gradients, 0, D3D11_MAP_READ, 0, &gradient_mapped)) &&
-            SUCCEEDED(context->Map(slot.source, 0, D3D11_MAP_READ, 0, &source_mapped))) {
+            SUCCEEDED(context->Map(slot.source, 0, D3D11_MAP_READ, 0, &source_mapped)) &&
+            SUCCEEDED(context->Map(slot.depth, 0, D3D11_MAP_READ, 0, &depth_mapped))) {
             SurfaceCaptureFrame frame(impl_->width, impl_->height, slot.frame_index);
             for (std::uint32_t y = 0; y < impl_->height; ++y) {
                 const auto *row = static_cast<const std::uint8_t *>(mapped.pData) +
@@ -556,10 +580,13 @@ std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
                     static_cast<std::size_t>(y) * gradient_mapped.RowPitch;
                 const auto *source_row = static_cast<const std::uint8_t *>(source_mapped.pData) +
                     static_cast<std::size_t>(y) * source_mapped.RowPitch;
+                const auto *depth_row = static_cast<const std::uint8_t *>(depth_mapped.pData) +
+                    static_cast<std::size_t>(y) * depth_mapped.RowPitch;
                 for (std::uint32_t x = 0; x < impl_->width; ++x) {
                     const auto *encoded = reinterpret_cast<const std::uint32_t *>(row) + x * 4;
                     const auto *gradient = reinterpret_cast<const float *>(gradient_row) + x * 4;
                     const auto *source = reinterpret_cast<const float *>(source_row) + x * 4;
+                    const auto depth = reinterpret_cast<const float *>(depth_row)[x];
                     auto &pixel = frame.pixels().at(x, y);
                     pixel.material_id = static_cast<std::uint64_t>(encoded[0]) |
                         (static_cast<std::uint64_t>(encoded[1]) << 32);
@@ -574,8 +601,11 @@ std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
                     pixel.source_g = source[1];
                     pixel.source_b = source[2];
                     pixel.source_a = source[3];
+                    pixel.framebuffer_depth = depth;
+                    pixel.hit_depth = depth;
                 }
             }
+            context->Unmap(slot.depth, 0);
             context->Unmap(slot.source, 0);
             context->Unmap(slot.gradients, 0);
             context->Unmap(slot.texture, 0);
@@ -583,6 +613,7 @@ std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
         } else {
             // Mapping the identity surface may have succeeded before the
             // gradient surface failed; unmap only that first resource.
+            if (depth_mapped.pData != nullptr) context->Unmap(slot.depth, 0);
             if (source_mapped.pData != nullptr) context->Unmap(slot.source, 0);
             if (gradient_mapped.pData != nullptr) context->Unmap(slot.gradients, 0);
             if (mapped.pData != nullptr) context->Unmap(slot.texture, 0);
@@ -596,11 +627,13 @@ std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
             context->ClearRenderTargetView(impl_->target_view, k_clear.data());
             context->ClearRenderTargetView(impl_->gradient_target_view, k_clear.data());
             context->ClearRenderTargetView(impl_->source_target_view, k_missing_source.data());
+            context->ClearRenderTargetView(impl_->depth_target_view, k_missing_source.data());
             impl_->target_cleared = true;
         }
         context->CopyResource(next.texture, impl_->target);
         context->CopyResource(next.gradients, impl_->gradient_target);
         context->CopyResource(next.source, impl_->source_target);
+        context->CopyResource(next.depth, impl_->depth_target);
         context->End(next.query);
         next.in_flight = true;
         next.frame_index = impl_->next_frame_index++;
@@ -611,6 +644,7 @@ std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
     context->ClearRenderTargetView(impl_->target_view, k_clear.data());
     context->ClearRenderTargetView(impl_->gradient_target_view, k_clear.data());
     context->ClearRenderTargetView(impl_->source_target_view, k_missing_source.data());
+    context->ClearRenderTargetView(impl_->depth_target_view, k_missing_source.data());
     return result;
 }
 
