@@ -1,0 +1,214 @@
+@echo off
+setlocal EnableExtensions
+
+rem NeuralPass Windows x64 builder.
+rem Usage:
+rem   build_windows.cmd              Build DirectML version with Candy model
+rem   build_windows.cmd directml all Build DirectML version with all art models
+rem   build_windows.cmd preview      Build without ONNX Runtime
+
+cd /d "%~dp0"
+set "NP_ROOT=%CD%"
+set "NP_MODE=%~1"
+set "NP_MODELS=%~2"
+if not defined NP_MODE set "NP_MODE=directml"
+
+if /I not "%NP_MODE%"=="directml" if /I not "%NP_MODE%"=="preview" (
+    echo ERROR: First argument must be directml or preview.
+    echo Usage: build_windows.cmd [directml^|preview] [all]
+    exit /b 2
+)
+
+echo.
+echo ============================================================
+echo  NeuralPass Windows builder - %NP_MODE%
+echo ============================================================
+echo.
+
+call :find_tools || exit /b 1
+call :prepare_reshade || exit /b 1
+
+if /I "%NP_MODE%"=="directml" (
+    call :prepare_directml || exit /b 1
+    call :prepare_models || exit /b 1
+    set "NP_BUILD=%NP_ROOT%\build-windows-directml"
+) else (
+    set "NP_BUILD=%NP_ROOT%\build-windows-preview"
+)
+
+echo [4/6] Configuring CMake...
+if /I "%NP_MODE%"=="directml" (
+    cmake -S "%NP_ROOT%" -B "%NP_BUILD%" -A x64 ^
+      -DNEURALPASS_BUILD_ADDON=ON ^
+      -DNEURALPASS_BUILD_TESTS=ON ^
+      -DRESHADE_SDK_DIR="%NP_ROOT%\external\reshade" ^
+      -DONNXRUNTIME_ROOT="%NP_ROOT%\external\onnxruntime"
+) else (
+    cmake -S "%NP_ROOT%" -B "%NP_BUILD%" -A x64 ^
+      -DNEURALPASS_BUILD_ADDON=ON ^
+      -DNEURALPASS_BUILD_TESTS=ON ^
+      -DRESHADE_SDK_DIR="%NP_ROOT%\external\reshade" ^
+      -DONNXRUNTIME_ROOT=
+)
+if errorlevel 1 goto :failed
+
+echo [5/6] Building Release x64 and running tests...
+cmake --build "%NP_BUILD%" --config Release --parallel
+if errorlevel 1 goto :failed
+ctest --test-dir "%NP_BUILD%" -C Release --output-on-failure
+if errorlevel 1 goto :failed
+
+echo [6/6] Assembling deployment folder...
+set "NP_DIST=%NP_ROOT%\dist\NeuralPass"
+if not exist "%NP_DIST%" mkdir "%NP_DIST%"
+if not exist "%NP_DIST%\reshade-shaders\Shaders" mkdir "%NP_DIST%\reshade-shaders\Shaders"
+
+copy /Y "%NP_BUILD%\Release\NeuralPass.addon64" "%NP_DIST%\NeuralPass.addon64" >nul
+if errorlevel 1 (
+    echo ERROR: The expected add-on was not produced.
+    goto :failed
+)
+copy /Y "%NP_ROOT%\shaders\NeuralPass.fx" "%NP_DIST%\reshade-shaders\Shaders\NeuralPass.fx" >nul
+
+if /I "%NP_MODE%"=="directml" (
+    copy /Y "%NP_ROOT%\external\onnxruntime\lib\onnxruntime.dll" "%NP_DIST%\onnxruntime.dll" >nul
+    copy /Y "%NP_ROOT%\external\onnxruntime\lib\onnxruntime_providers_shared.dll" "%NP_DIST%\onnxruntime_providers_shared.dll" >nul
+    copy /Y "%NP_ROOT%\external\onnxruntime\lib\DirectML.dll" "%NP_DIST%\DirectML.dll" >nul
+    if not exist "%NP_DIST%\models\downloads" mkdir "%NP_DIST%\models\downloads"
+    copy /Y "%NP_ROOT%\models\downloads\*.onnx" "%NP_DIST%\models\downloads\" >nul
+)
+
+echo.
+echo ============================================================
+echo  BUILD SUCCEEDED
+echo ============================================================
+echo Ready-to-copy package:
+echo   %NP_DIST%
+echo.
+echo Install ReShade with full add-on support into an offline game,
+echo then copy the CONTENTS of that folder beside the game executable.
+echo Keep "NeuralPass (keep last)" last in the technique order.
+echo.
+exit /b 0
+
+:find_tools
+echo [1/6] Checking build tools...
+where git >nul 2>nul || (
+    echo ERROR: Git was not found in PATH.
+    exit /b 1
+)
+where cmake >nul 2>nul || (
+    echo ERROR: CMake was not found in PATH. Install the Visual Studio CMake component.
+    exit /b 1
+)
+
+where cl >nul 2>nul
+if not errorlevel 1 goto :compiler_ready
+
+set "NP_VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not exist "%NP_VSWHERE%" (
+    echo ERROR: MSVC was not found. Install Visual Studio 2022 Desktop development with C++.
+    exit /b 1
+)
+set "NP_VSINSTALL="
+for /f "usebackq tokens=*" %%I in (`"%NP_VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "NP_VSINSTALL=%%I"
+if not defined NP_VSINSTALL (
+    echo ERROR: Visual Studio C++ tools were not found.
+    exit /b 1
+)
+call "%NP_VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+if errorlevel 1 (
+    echo ERROR: Visual Studio developer environment initialization failed.
+    exit /b 1
+)
+
+:compiler_ready
+where py >nul 2>nul
+if not errorlevel 1 (
+    set "NP_PY=py -3"
+) else (
+    where python >nul 2>nul || (
+        echo ERROR: Python 3 was not found in PATH.
+        exit /b 1
+    )
+    set "NP_PY=python"
+)
+echo       Tools ready.
+exit /b 0
+
+:prepare_reshade
+echo [2/6] Preparing ReShade 6.8.0 SDK...
+if not exist "%NP_ROOT%\external" mkdir "%NP_ROOT%\external"
+if not exist "%NP_ROOT%\external\reshade\include\reshade.hpp" (
+    git clone --branch v6.8.0 --depth 1 ^
+      https://github.com/crosire/reshade.git "%NP_ROOT%\external\reshade"
+    if errorlevel 1 exit /b 1
+)
+if not exist "%NP_ROOT%\external\reshade\deps\imgui\imgui.h" (
+    git -C "%NP_ROOT%\external\reshade" submodule update --init deps/imgui
+    if errorlevel 1 exit /b 1
+)
+if not exist "%NP_ROOT%\external\reshade\deps\imgui\imgui.h" (
+    echo ERROR: ReShade's ImGui submodule is missing.
+    exit /b 1
+)
+exit /b 0
+
+:prepare_directml
+echo [3/6] Preparing ONNX Runtime DirectML...
+set "NP_ORT_VERSION=1.24.4"
+set "NP_DML_VERSION=1.15.4"
+set "NP_ORT_ZIP=%NP_ROOT%\external\onnxruntime-directml-%NP_ORT_VERSION%.zip"
+set "NP_DML_ZIP=%NP_ROOT%\external\directml-%NP_DML_VERSION%.zip"
+set "NP_ORT_PACKAGE=%NP_ROOT%\external\ort-package-%NP_ORT_VERSION%"
+set "NP_DML_PACKAGE=%NP_ROOT%\external\dml-package-%NP_DML_VERSION%"
+set "NP_ORT_ROOT=%NP_ROOT%\external\onnxruntime"
+
+if not exist "%NP_ORT_PACKAGE%\build\native\include\onnxruntime_cxx_api.h" (
+    echo       Downloading ONNX Runtime %NP_ORT_VERSION%...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+      "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest 'https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime.DirectML/%NP_ORT_VERSION%' -OutFile '%NP_ORT_ZIP%'; Expand-Archive -LiteralPath '%NP_ORT_ZIP%' -DestinationPath '%NP_ORT_PACKAGE%' -Force"
+    if errorlevel 1 exit /b 1
+)
+
+if not exist "%NP_DML_PACKAGE%\bin\x64-win\DirectML.dll" (
+    echo       Downloading DirectML %NP_DML_VERSION%...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+      "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest 'https://www.nuget.org/api/v2/package/Microsoft.AI.DirectML/%NP_DML_VERSION%' -OutFile '%NP_DML_ZIP%'; Expand-Archive -LiteralPath '%NP_DML_ZIP%' -DestinationPath '%NP_DML_PACKAGE%' -Force"
+    if errorlevel 1 exit /b 1
+)
+
+if not exist "%NP_ORT_ROOT%\include" mkdir "%NP_ORT_ROOT%\include"
+if not exist "%NP_ORT_ROOT%\lib" mkdir "%NP_ORT_ROOT%\lib"
+xcopy /E /I /Y "%NP_ORT_PACKAGE%\build\native\include\*" "%NP_ORT_ROOT%\include\" >nul
+copy /Y "%NP_ORT_PACKAGE%\runtimes\win-x64\native\onnxruntime.lib" "%NP_ORT_ROOT%\lib\" >nul
+copy /Y "%NP_ORT_PACKAGE%\runtimes\win-x64\native\onnxruntime.dll" "%NP_ORT_ROOT%\lib\" >nul
+copy /Y "%NP_ORT_PACKAGE%\runtimes\win-x64\native\onnxruntime_providers_shared.dll" "%NP_ORT_ROOT%\lib\" >nul
+copy /Y "%NP_DML_PACKAGE%\bin\x64-win\DirectML.dll" "%NP_ORT_ROOT%\lib\" >nul
+
+if not exist "%NP_ORT_ROOT%\include\dml_provider_factory.h" (
+    echo ERROR: DirectML provider headers were not prepared correctly.
+    exit /b 1
+)
+if not exist "%NP_ORT_ROOT%\lib\onnxruntime.lib" (
+    echo ERROR: onnxruntime.lib was not prepared correctly.
+    exit /b 1
+)
+exit /b 0
+
+:prepare_models
+if /I "%NP_MODELS%"=="all" (
+    %NP_PY% "%NP_ROOT%\tools\fetch_models.py" candy mosaic rain-princess udnie
+) else (
+    %NP_PY% "%NP_ROOT%\tools\fetch_models.py" candy
+)
+if errorlevel 1 exit /b 1
+exit /b 0
+
+:failed
+echo.
+echo ============================================================
+echo  BUILD FAILED
+echo ============================================================
+echo Review the first error above. The build directory was preserved.
+exit /b 1

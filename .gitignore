@@ -1,0 +1,14 @@
+build/
+build-windows-*/
+dist/
+external/
+out/
+.cache/
+__pycache__/
+*.pyc
+*.dll
+*.pdb
+*.onnx
+models/downloads/
+models/sdxl-lightning/
+.pytest_cache/

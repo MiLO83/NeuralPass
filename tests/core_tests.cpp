@@ -1,0 +1,355 @@
+#include "neuralpass/temporal.hpp"
+#include "neuralpass/tile_scheduler.hpp"
+#include "neuralpass/inference.hpp"
+#include "neuralpass/surface_capture.hpp"
+#include "neuralpass/texture_baker.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cstdlib>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <stdexcept>
+
+using namespace neuralpass;
+
+static void require(bool condition, const char *message) {
+    if (!condition) throw std::runtime_error(message);
+}
+
+static HistoryFrame solid_history(std::uint32_t w, std::uint32_t h, Color c) {
+    return {Image<Color>(w, h, c), Image<Color>(w, h, c), Image<float>(w, h, 0.5f),
+            Image<std::uint8_t>(w, h, 1), Image<std::uint16_t>(w, h, 0)};
+}
+
+static void test_reprojection_accepts_stable_pixels() {
+    auto previous = solid_history(8, 8, {0.2f, 0.3f, 0.4f, 1.0f});
+    Image<Color> current(8, 8, {0.2f, 0.3f, 0.4f, 1.0f});
+    Image<float> depth(8, 8, 0.5f);
+    Image<Motion> motion(8, 8, {});
+    auto result = reproject_history(current, &depth, &motion, previous, {});
+    require(result.accepted == 64 && result.rejected == 0, "stable pixels were rejected");
+    require(result.dirty.at(3, 3) == 0 && result.reprojected.age.at(3, 3) == 1,
+            "stable history was not propagated");
+}
+
+static void test_disocclusion_rejected() {
+    auto previous = solid_history(8, 8, {0.2f, 0.3f, 0.4f, 1.0f});
+    Image<Color> current(8, 8, {0.2f, 0.3f, 0.4f, 1.0f});
+    Image<float> depth(8, 8, 0.5f);
+    Image<Motion> motion(8, 8, {});
+    depth.at(4, 4) = 0.9f;
+    auto result = reproject_history(current, &depth, &motion, previous, {});
+    require(result.dirty.at(4, 4) == 1, "depth disocclusion was accepted");
+    motion.at(0, 0) = {-20.0f, 0.0f};
+    result = reproject_history(current, &depth, &motion, previous, {});
+    require(result.dirty.at(0, 0) == 1, "off-screen motion was accepted");
+}
+
+static void test_motion_reprojects_previous_pixel() {
+    auto previous = solid_history(4, 1, {0.0f, 0.0f, 0.0f, 1.0f});
+    for (std::uint32_t x = 0; x < 4; ++x) {
+        const float value = static_cast<float>(x) / 4.0f;
+        previous.source.at(x, 0) = {value, value, value, 1.0f};
+        previous.styled.at(x, 0) = {1.0f-value, 0.0f, 0.0f, 1.0f};
+    }
+    Image<Color> current(4, 1);
+    Image<Motion> motion(4, 1, {-1.0f, 0.0f});
+    for (std::uint32_t x = 1; x < 4; ++x) current.at(x, 0) = previous.source.at(x-1, 0);
+    auto result = reproject_history(current, nullptr, &motion, previous, {});
+    require(result.dirty.at(0, 0) == 1, "newly exposed edge was not dirty");
+    require(result.dirty.at(2, 0) == 0, "valid motion sample was rejected");
+    require(result.reprojected.styled.at(2, 0).r == previous.styled.at(1, 0).r,
+            "styled history came from the wrong motion sample");
+}
+
+static void test_dilation_and_priority() {
+    Image<std::uint8_t> dirty(600, 300, 0);
+    Image<std::uint16_t> age(600, 300, 0);
+    dirty.at(300, 150) = 1;
+    const auto dilated = dilate_mask(dirty, 2);
+    require(dilated.at(298, 148) == 1 && dilated.at(297, 147) == 0, "mask dilation failed");
+    const auto jobs = schedule_tiles(dirty, age, {.tile_size=256, .halo=32,
+        .dilation_radius=2, .tile_budget=1, .refresh_age=120});
+    require(jobs.size() == 1, "tile budget not honored");
+    require(jobs[0].core.x == 256 && jobs[0].core.y == 0, "dirty tile was not selected");
+    require(jobs[0].padded.x == 224 && jobs[0].padded.width == 320, "tile halo incorrect");
+}
+
+static void test_age_refresh() {
+    Image<std::uint8_t> dirty(512, 256, 0);
+    Image<std::uint16_t> age(512, 256, 0);
+    age.at(400, 100) = 121;
+    const auto jobs = schedule_tiles(dirty, age, {.tile_size=256, .halo=32,
+        .dilation_radius=0, .tile_budget=2, .refresh_age=120});
+    require(jobs.size() == 1 && jobs[0].core.x == 256 && jobs[0].refresh_only,
+            "aged tile was not refreshed");
+}
+
+static void test_preview_backend_is_bounded() {
+    auto backend = make_preview_backend("photo-detail");
+    Image<Color> image(3, 3, {0.5f, 0.5f, 0.5f, 1.0f});
+    image.at(1, 1) = {1.0f, 0.0f, 0.25f, 1.0f};
+    const auto output = backend->run(image);
+    require(output.width() == 3 && output.height() == 3, "preview changed image dimensions");
+    for (const auto &pixel : output.pixels())
+        require(pixel.r >= 0.0f && pixel.r <= 1.0f && pixel.g >= 0.0f && pixel.g <= 1.0f &&
+                pixel.b >= 0.0f && pixel.b <= 1.0f, "preview produced an invalid color");
+}
+
+static void test_texture_baker_splats_inpaints_and_reconstructs() {
+    Image<Color> restyled(2, 1);
+    restyled.at(0, 0) = {1.0f, 0.1f, 0.0f, 1.0f};
+    restyled.at(1, 0) = {0.0f, 0.2f, 1.0f, 1.0f};
+    const std::array<SurfaceCorrespondence, 2> mapping {{
+        {0, 0, 7, 0.25f, 0.5f, 1.0f},
+        {1, 0, 7, 0.75f, 0.5f, 1.0f},
+    }};
+    MaterialTextureAtlas atlas(7, 16, 8);
+    require(atlas.color().at(0, 0).r == 1.0f && atlas.color().at(0, 0).g == 0.0f &&
+            atlas.color().at(0, 0).b == 1.0f,
+            "new atlas was not initialized to the magenta sentinel");
+    atlas.splat(restyled, mapping);
+    const auto observed_before = static_cast<std::size_t>(std::count(
+        atlas.coverage().pixels().begin(), atlas.coverage().pixels().end(), std::uint8_t {2}));
+    require(observed_before > 0 && observed_before < atlas.coverage().size(),
+            "UV splat did not produce a partial observed mask");
+    atlas.inpaint_unseen();
+    require(std::count(atlas.coverage().pixels().begin(), atlas.coverage().pixels().end(),
+                       std::uint8_t {0}) == 0,
+            "UV inpaint left unseen texture pixels");
+    Image<Color> fallback(2, 1, {0.0f, 1.0f, 0.0f, 1.0f});
+    const auto reconstructed = reconstruct_from_atlas(fallback, atlas, mapping);
+    require(reconstructed.at(0, 0).r > reconstructed.at(0, 0).b &&
+            reconstructed.at(1, 0).b > reconstructed.at(1, 0).r,
+            "wrapped atlas did not reproduce the visible restyled colors");
+}
+
+static void test_texture_baker_locks_observed_texels_and_rejects_bad_depth() {
+    Image<Color> restyled(3, 1);
+    restyled.at(0, 0) = {1.0f, 0.0f, 0.0f, 1.0f};
+    restyled.at(1, 0) = {0.0f, 0.0f, 1.0f, 1.0f};
+    restyled.at(2, 0) = {0.0f, 1.0f, 0.0f, 1.0f};
+    MaterialTextureAtlas atlas(9, 8, 8);
+    const std::array<SurfaceCorrespondence, 3> mapping {{
+        {0, 0, 9, 0.5f, 0.5f, 1.0f, 0.5f, 0.5f},
+        {1, 0, 9, 0.5f, 0.5f, 1.0f, 0.5f, 0.5f},
+        {2, 0, 9, 0.1f, 0.1f, 1.0f, 0.2f, 0.9f},
+    }};
+    atlas.splat(restyled, mapping);
+    const auto locked = atlas.sample(0.5f, 0.5f);
+    require(locked.r > locked.b, "later framebuffer sample overwrote an observed texel");
+    require(atlas.coverage().at(1, 1) == MaterialTextureAtlas::kUnseen,
+            "depth-mismatched sample painted an atlas texel");
+}
+
+static void test_material_baker_handles_sparse_multiple_materials() {
+    Image<Color> restyled(4, 1);
+    restyled.at(0, 0) = {1.0f, 0.0f, 0.0f, 1.0f};
+    restyled.at(1, 0) = {0.0f, 0.0f, 1.0f, 1.0f};
+    restyled.at(2, 0) = {0.0f, 1.0f, 0.0f, 1.0f};
+    restyled.at(3, 0) = {1.0f, 1.0f, 0.0f, 1.0f};
+    const std::array<SurfaceCorrespondence, 4> mapping {{
+        {0, 0, 11, 0.25f, 0.5f, 1.0f},
+        {1, 0, 22, 0.75f, 0.5f, 1.0f},
+        {2, 0, 33, 0.50f, 0.5f, 0.0f},
+        {3, 0, 44, std::numeric_limits<float>::quiet_NaN(), 0.5f, 1.0f},
+    }};
+    MaterialTextureBaker baker({.atlas_width=16, .atlas_height=8});
+    const auto stats = baker.update(restyled, mapping);
+    require(stats.submitted == 4 && stats.accepted == 2 && stats.materials_touched == 2,
+            "multi-material baker reported incorrect update statistics");
+    require(baker.material_count() == 2 && baker.find(11) != nullptr && baker.find(22) != nullptr,
+            "valid materials were not retained independently");
+    require(baker.find(33) == nullptr && baker.find(44) == nullptr,
+            "invalid observations created empty material atlases");
+
+    Image<Color> fallback(4, 1, {0.2f, 0.3f, 0.4f, 1.0f});
+    const auto reconstructed = baker.reconstruct(fallback, mapping);
+    require(reconstructed.at(0, 0).r > reconstructed.at(0, 0).b,
+            "first material was not reconstructed");
+    require(reconstructed.at(1, 0).b > reconstructed.at(1, 0).r,
+            "second material was not reconstructed");
+    require(reconstructed.at(2, 0).g == fallback.at(2, 0).g &&
+            reconstructed.at(3, 0).g == fallback.at(3, 0).g,
+            "uncovered pixels did not retain the live fallback");
+}
+
+static void test_uncovered_atlas_never_reconstructs_debug_sentinel() {
+    MaterialTextureAtlas atlas(5, 8, 8);
+    Image<Color> fallback(1, 1, {0.1f, 0.2f, 0.3f, 1.0f});
+    const std::array<SurfaceCorrespondence, 1> mapping {{{0, 0, 5, 0.5f, 0.5f, 1.0f}}};
+    const auto reconstructed = reconstruct_from_atlas(fallback, atlas, mapping);
+    require(reconstructed.at(0, 0).r == fallback.at(0, 0).r &&
+            reconstructed.at(0, 0).b == fallback.at(0, 0).b,
+            "unseen atlas texel leaked the magenta debug sentinel");
+}
+
+static void test_partial_atlas_sampling_ignores_unseen_neighbors() {
+    MaterialTextureAtlas atlas(6, 8, 8);
+    const SurfaceCorrespondence observed {0, 0, 6, 0.0f, 0.0f, 1.0f};
+    require(atlas.observe({0.0f, 1.0f, 0.0f, 1.0f}, observed),
+            "corner atlas observation was rejected");
+    const auto edge = atlas.sample(0.05f, 0.0f);
+    require(edge.r == 0.0f && edge.g > 0.99f && edge.b == 0.0f,
+            "bilinear atlas sampling blended the magenta unseen sentinel");
+}
+
+static void test_baker_plans_only_newly_revealed_texels_and_rejects_cut_results() {
+    MaterialTextureBaker baker({.atlas_width=16, .atlas_height=8});
+    Image<Color> first(2, 1);
+    first.at(0, 0) = {1.0f, 0.0f, 0.0f, 1.0f};
+    first.at(1, 0) = {0.0f, 0.0f, 1.0f, 1.0f};
+    const std::array<SurfaceCorrespondence, 2> mapping {{
+        {0, 0, 71, 0.25f, 0.5f, 1.0f},
+        {1, 0, 71, 0.75f, 0.5f, 1.0f},
+    }};
+
+    const auto initial_plan = baker.plan(first, mapping);
+    require(initial_plan.known_pixels == 0 && initial_plan.revealed_pixels == 2 &&
+            initial_plan.reveal_mask.at(0, 0) == 255 && initial_plan.reveal_mask.at(1, 0) == 255,
+            "initial bake plan did not expose only missing material texels");
+    const auto initial_commit = baker.commit(initial_plan, first, mapping);
+    require(initial_commit.accepted == 2 && !initial_commit.stale,
+            "initial revealed texels were not committed");
+
+    const auto stable_plan = baker.plan(Image<Color>(2, 1, {0.0f, 1.0f, 0.0f, 1.0f}), mapping);
+    require(stable_plan.known_pixels == 2 && stable_plan.revealed_pixels == 0 &&
+            stable_plan.reveal_mask.at(0, 0) == 0 && stable_plan.reveal_mask.at(1, 0) == 0,
+            "established atlas texels were scheduled for regeneration");
+    require(stable_plan.composite.at(0, 0).r > stable_plan.composite.at(0, 0).g &&
+            stable_plan.composite.at(1, 0).b > stable_plan.composite.at(1, 0).g,
+            "bake plan did not reproject persistent material colors");
+
+    SurfaceCorrespondence newly_visible {0, 0, 72, 0.5f, 0.5f, 1.0f};
+    const auto before_cut = baker.plan(first, std::span(&newly_visible, 1));
+    baker.invalidate_in_flight();
+    const auto rejected = baker.commit(before_cut, first, std::span(&newly_visible, 1));
+    require(rejected.stale && rejected.accepted == 0 && baker.find(72) == nullptr,
+            "a pre-cut inpaint result leaked into the persistent texture cache");
+    require(baker.find(71) != nullptr,
+            "camera-cut invalidation discarded established material atlases");
+}
+
+static void test_surface_capture_compacts_backend_neutral_pixels() {
+    SurfaceCaptureFrame capture(3, 2);
+    capture.pixels().at(0, 0) = {101, 0.25f, 0.75f, 0.4f, 0.4f, 0.9f};
+    capture.pixels().at(1, 0) = {0, 0.5f, 0.5f, 0.4f, 0.4f, 1.0f};
+    capture.pixels().at(2, 0) = {202, 0.5f, 0.5f, 0.4f,
+        std::numeric_limits<float>::quiet_NaN(), 1.0f};
+    capture.pixels().at(1, 1) = {303, 0.1f, 0.2f,
+        std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), 0.75f};
+    capture.pixels().at(2, 1) = {404, 0.1f, 0.2f, 0.2f, 0.2f, 0.001f};
+    const auto mapping = capture.correspondences(0.01f);
+    require(mapping.size() == 2, "surface capture did not reject invalid backend samples");
+    require(mapping[0].screen_x == 0 && mapping[0].screen_y == 0 &&
+            mapping[0].material_id == 101,
+            "surface capture changed the first screen-space correspondence");
+    require(mapping[1].screen_x == 1 && mapping[1].screen_y == 1 &&
+            mapping[1].material_id == 303,
+            "surface capture did not preserve an adapter without optional depth");
+}
+
+static void test_scene_transition_preserves_camera_cuts_and_confirms_new_scenes() {
+    SceneTransitionTracker tracker({.material_overlap_threshold=0.25f,
+                                    .scene_change_confirmation_frames=3});
+    const std::array<SurfaceCorrespondence, 2> room {{
+        {0, 0, 1001, 0.1f, 0.1f, 1.0f},
+        {1, 0, 1002, 0.2f, 0.2f, 1.0f},
+    }};
+    require(tracker.observe(false, room) == SceneTransition::stable,
+            "first scene was not initialized as stable");
+    require(tracker.observe(true, room) == SceneTransition::camera_cut,
+            "visual cut with shared materials was not classified as a camera cut");
+
+    const std::array<SurfaceCorrespondence, 2> other {{
+        {0, 0, 9001, 0.1f, 0.1f, 1.0f},
+        {1, 0, 9002, 0.2f, 0.2f, 1.0f},
+    }};
+    require(tracker.observe(true, other) == SceneTransition::camera_cut,
+            "foreign cut cleared the scene cache before confirmation");
+    require(tracker.observe(false, other) == SceneTransition::stable,
+            "foreign scene was confirmed too early");
+    require(tracker.observe(false, other) == SceneTransition::scene_change,
+            "sustained foreign materials did not confirm a scene change");
+
+    SceneTransitionTracker no_geometry;
+    require(no_geometry.observe(true, {}) == SceneTransition::camera_cut,
+            "capture-less visual cut was not handled conservatively");
+}
+
+static void test_atlas_cache_round_trip_and_rejects_corruption() {
+    MaterialTextureBaker source({.atlas_width=16, .atlas_height=8});
+    Image<Color> styled(2, 1);
+    styled.at(0, 0) = {0.9f, 0.1f, 0.2f, 1.0f};
+    styled.at(1, 0) = {0.1f, 0.2f, 0.9f, 1.0f};
+    const std::array<SurfaceCorrespondence, 2> mapping {{
+        {0, 0, 0x1234, 0.25f, 0.5f, 1.0f},
+        {1, 0, 0x1234, 0.75f, 0.5f, 1.0f},
+    }};
+    require(source.update(styled, mapping).accepted == 2,
+            "cache fixture did not paint its atlas");
+
+    const auto unique = std::to_string(std::chrono::steady_clock::now()
+        .time_since_epoch().count());
+    const auto directory = std::filesystem::temp_directory_path() /
+        ("neuralpass-atlas-test-" + unique);
+    const std::array<std::uint64_t, 1> stable {0x1234};
+    const auto saved = source.save_cache(directory, stable);
+    require(saved.saved == 1 && saved.rejected == 0,
+            "restart-stable atlas was not saved");
+
+    MaterialTextureBaker restored({.atlas_width=16, .atlas_height=8});
+    const auto loaded = restored.load_cache(directory);
+    require(loaded.loaded == 1 && restored.find(0x1234) != nullptr,
+            "saved atlas did not survive a cache round trip");
+    const auto reconstructed = restored.reconstruct(
+        Image<Color>(2, 1, {0.0f, 1.0f, 0.0f, 1.0f}), mapping);
+    require(reconstructed.at(0, 0).r > reconstructed.at(0, 0).g &&
+            reconstructed.at(1, 0).b > reconstructed.at(1, 0).g,
+            "loaded atlas changed its observed colors");
+
+    const auto corrupt = directory / "corrupt.npatlas";
+    {
+        std::ofstream output(corrupt, std::ios::binary);
+        output << "NPATL01";
+    }
+    MaterialTextureBaker verifier({.atlas_width=16, .atlas_height=8});
+    const auto checked = verifier.load_cache(directory);
+    require(checked.loaded == 1 && checked.rejected == 1,
+            "cache loader did not isolate a corrupt snapshot");
+
+    std::error_code error;
+    for (const auto &entry : std::filesystem::directory_iterator(directory, error))
+        std::filesystem::remove(entry.path(), error);
+    std::filesystem::remove(directory, error);
+}
+
+int main() {
+    try {
+        test_reprojection_accepts_stable_pixels();
+        test_disocclusion_rejected();
+        test_motion_reprojects_previous_pixel();
+        test_dilation_and_priority();
+        test_age_refresh();
+        test_preview_backend_is_bounded();
+        test_texture_baker_splats_inpaints_and_reconstructs();
+        test_texture_baker_locks_observed_texels_and_rejects_bad_depth();
+        test_material_baker_handles_sparse_multiple_materials();
+        test_uncovered_atlas_never_reconstructs_debug_sentinel();
+        test_partial_atlas_sampling_ignores_unseen_neighbors();
+        test_baker_plans_only_newly_revealed_texels_and_rejects_cut_results();
+        test_surface_capture_compacts_backend_neutral_pixels();
+        test_scene_transition_preserves_camera_cuts_and_confirms_new_scenes();
+        test_atlas_cache_round_trip_and_rejects_corruption();
+        std::cout << "NeuralPass core tests passed\n";
+        return EXIT_SUCCESS;
+    } catch (const std::exception &error) {
+        std::cerr << "FAIL: " << error.what() << '\n';
+        return EXIT_FAILURE;
+    }
+}
