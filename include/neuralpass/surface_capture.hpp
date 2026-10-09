@@ -26,12 +26,14 @@ struct SurfaceCapturePixel {
 class SurfaceCaptureFrame {
 public:
     SurfaceCaptureFrame() = default;
-    SurfaceCaptureFrame(std::uint32_t width, std::uint32_t height)
-        : pixels_(width, height) {}
+    SurfaceCaptureFrame(std::uint32_t width, std::uint32_t height,
+                        std::uint64_t frame_index = 0)
+        : pixels_(width, height), frame_index_(frame_index) {}
 
     [[nodiscard]] std::uint32_t width() const noexcept { return pixels_.width(); }
     [[nodiscard]] std::uint32_t height() const noexcept { return pixels_.height(); }
     [[nodiscard]] bool empty() const noexcept { return pixels_.empty(); }
+    [[nodiscard]] std::uint64_t frame_index() const noexcept { return frame_index_; }
     [[nodiscard]] Image<SurfaceCapturePixel> &pixels() noexcept { return pixels_; }
     [[nodiscard]] const Image<SurfaceCapturePixel> &pixels() const noexcept { return pixels_; }
 
@@ -43,6 +45,7 @@ public:
 
 private:
     Image<SurfaceCapturePixel> pixels_;
+    std::uint64_t frame_index_ = 0;
 };
 
 enum class SceneTransition {

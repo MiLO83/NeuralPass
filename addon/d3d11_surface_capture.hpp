@@ -1,0 +1,65 @@
+#pragma once
+
+#include "neuralpass/surface_capture.hpp"
+
+#include <d3d11.h>
+
+#include <cstdint>
+#include <optional>
+#include <string>
+
+namespace neuralpass::d3d11_capture {
+
+struct UvSemantic {
+    std::string name;
+    std::uint32_t index = 0;
+    std::uint32_t register_index = 0;
+
+    [[nodiscard]] bool valid() const noexcept { return !name.empty(); }
+};
+
+// Reads the vertex shader output signature and selects the first two-component
+// (or wider) TEXCOORD interpolant. This is the value rasterization actually
+// feeds to the pixel shader, rather than an untransformed vertex-buffer guess.
+[[nodiscard]] UvSemantic inspect_uv_output(const void *bytecode, std::size_t size);
+
+class SurfaceCapture {
+public:
+    SurfaceCapture() = default;
+    ~SurfaceCapture();
+    SurfaceCapture(const SurfaceCapture &) = delete;
+    SurfaceCapture &operator=(const SurfaceCapture &) = delete;
+
+    [[nodiscard]] bool initialize(ID3D11Device *device, std::uint32_t width,
+                                  std::uint32_t height);
+    void reset();
+
+    // Called from ReShade's pre-draw event. On success this executes the game
+    // draw exactly once, replays it into the UV surface, restores all touched
+    // D3D11 state, and returns true so ReShade suppresses the wrapper's draw.
+    [[nodiscard]] bool draw(ID3D11DeviceContext *context, const UvSemantic &uv,
+                            std::uint64_t material_id, std::uint32_t vertex_count,
+                            std::uint32_t instance_count, std::uint32_t first_vertex,
+                            std::uint32_t first_instance);
+    [[nodiscard]] bool draw_indexed(ID3D11DeviceContext *context, const UvSemantic &uv,
+                                    std::uint64_t material_id, std::uint32_t index_count,
+                                    std::uint32_t instance_count, std::uint32_t first_index,
+                                    std::int32_t vertex_offset,
+                                    std::uint32_t first_instance);
+
+    // Polls completed staging copies without flushing or waiting, then queues
+    // the current surface into a free ring slot and clears it for the next frame.
+    [[nodiscard]] std::optional<SurfaceCaptureFrame> finish_frame(
+        ID3D11DeviceContext *context);
+
+    [[nodiscard]] std::uint64_t replayed_draws() const noexcept;
+    [[nodiscard]] std::uint64_t dropped_frames() const noexcept;
+    [[nodiscard]] std::uint32_t width() const noexcept;
+    [[nodiscard]] std::uint32_t height() const noexcept;
+
+private:
+    struct Impl;
+    Impl *impl_ = nullptr;
+};
+
+} // namespace neuralpass::d3d11_capture

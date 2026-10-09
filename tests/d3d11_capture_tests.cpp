@@ -1,0 +1,227 @@
+#include "../addon/d3d11_surface_capture.hpp"
+
+#include <d3dcompiler.h>
+
+#include <array>
+#include <cmath>
+#include <cstring>
+#include <cstdlib>
+#include <iostream>
+#include <optional>
+#include <stdexcept>
+#include <string>
+
+namespace {
+
+template <typename T> void release(T *&object) {
+    if (object != nullptr) object->Release();
+    object = nullptr;
+}
+
+void require(bool condition, const char *message) {
+    if (!condition) throw std::runtime_error(message);
+}
+
+ID3DBlob *compile(const char *source, const char *profile) {
+    ID3DBlob *shader = nullptr;
+    ID3DBlob *errors = nullptr;
+    const auto result = D3DCompile(source, std::strlen(source), "capture-test", nullptr,
+        nullptr, "main", profile, D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &shader, &errors);
+    if (FAILED(result)) {
+        const std::string message = errors != nullptr
+            ? static_cast<const char *>(errors->GetBufferPointer()) : "shader compile failed";
+        release(errors);
+        throw std::runtime_error(message);
+    }
+    release(errors);
+    return shader;
+}
+
+void test_triangle_replay_produces_material_uv() {
+    ID3D11Device *device = nullptr;
+    ID3D11DeviceContext *context = nullptr;
+    D3D_FEATURE_LEVEL feature_level {};
+    require(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0,
+        nullptr, 0, D3D11_SDK_VERSION, &device, &feature_level, &context)),
+        "could not create the D3D11 WARP test device");
+    require(feature_level >= D3D_FEATURE_LEVEL_11_0,
+        "D3D11 WARP did not expose shader model 5");
+
+    constexpr char vertex_source[] =
+        "struct Input { float2 position : POSITION; float2 uv : TEXCOORD0; };"
+        "struct Output { float4 position : SV_Position; float2 uv : TEXCOORD0; };"
+        "Output main(Input input) { Output o; o.position=float4(input.position,0,1);"
+        "o.uv=input.uv; return o; }";
+    constexpr char pixel_source[] =
+        "float4 main(float2 uv : TEXCOORD0) : SV_Target { return float4(uv,0,1); }";
+    ID3DBlob *vertex_bytecode = compile(vertex_source, "vs_5_0");
+    ID3DBlob *pixel_bytecode = compile(pixel_source, "ps_5_0");
+    ID3D11VertexShader *vertex_shader = nullptr;
+    ID3D11PixelShader *pixel_shader = nullptr;
+    require(SUCCEEDED(device->CreateVertexShader(vertex_bytecode->GetBufferPointer(),
+        vertex_bytecode->GetBufferSize(), nullptr, &vertex_shader)),
+        "could not create the test vertex shader");
+    require(SUCCEEDED(device->CreatePixelShader(pixel_bytecode->GetBufferPointer(),
+        pixel_bytecode->GetBufferSize(), nullptr, &pixel_shader)),
+        "could not create the test pixel shader");
+
+    const auto uv_semantic = neuralpass::d3d11_capture::inspect_uv_output(
+        vertex_bytecode->GetBufferPointer(), vertex_bytecode->GetBufferSize());
+    require(uv_semantic.valid() && uv_semantic.name == "TEXCOORD" && uv_semantic.index == 0,
+        "vertex reflection did not find the rasterized UV output");
+
+    struct Vertex { float x, y, u, v; };
+    const std::array<Vertex, 3> vertices {{
+        {-1.0f, -1.0f, 0.0f, 1.0f},
+        { 0.0f,  1.0f, 0.5f, 0.0f},
+        { 1.0f, -1.0f, 1.0f, 1.0f},
+    }};
+    D3D11_BUFFER_DESC buffer_desc {};
+    buffer_desc.ByteWidth = sizeof(vertices);
+    buffer_desc.Usage = D3D11_USAGE_IMMUTABLE;
+    buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA buffer_data {vertices.data(), 0, 0};
+    ID3D11Buffer *vertex_buffer = nullptr;
+    require(SUCCEEDED(device->CreateBuffer(&buffer_desc, &buffer_data, &vertex_buffer)),
+        "could not create the test vertex buffer");
+    constexpr std::array<std::uint16_t, 3> indices {0, 1, 2};
+    D3D11_BUFFER_DESC index_desc {};
+    index_desc.ByteWidth = sizeof(indices);
+    index_desc.Usage = D3D11_USAGE_IMMUTABLE;
+    index_desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA index_data {indices.data(), 0, 0};
+    ID3D11Buffer *index_buffer = nullptr;
+    require(SUCCEEDED(device->CreateBuffer(&index_desc, &index_data, &index_buffer)),
+        "could not create the test index buffer");
+    const std::array<D3D11_INPUT_ELEMENT_DESC, 2> input_elements {{
+        {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0,
+            D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 8,
+            D3D11_INPUT_PER_VERTEX_DATA, 0},
+    }};
+    ID3D11InputLayout *input_layout = nullptr;
+    require(SUCCEEDED(device->CreateInputLayout(input_elements.data(), input_elements.size(),
+        vertex_bytecode->GetBufferPointer(), vertex_bytecode->GetBufferSize(), &input_layout)),
+        "could not create the test input layout");
+
+    D3D11_TEXTURE2D_DESC target_desc {};
+    target_desc.Width = 8;
+    target_desc.Height = 8;
+    target_desc.MipLevels = 1;
+    target_desc.ArraySize = 1;
+    target_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    target_desc.SampleDesc.Count = 1;
+    target_desc.Usage = D3D11_USAGE_DEFAULT;
+    target_desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+    ID3D11Texture2D *target = nullptr;
+    ID3D11RenderTargetView *target_view = nullptr;
+    require(SUCCEEDED(device->CreateTexture2D(&target_desc, nullptr, &target)) &&
+            SUCCEEDED(device->CreateRenderTargetView(target, nullptr, &target_view)),
+        "could not create the test render target");
+
+    constexpr UINT stride = sizeof(Vertex);
+    constexpr UINT offset = 0;
+    context->IASetInputLayout(input_layout);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context->IASetVertexBuffers(0, 1, &vertex_buffer, &stride, &offset);
+    context->IASetIndexBuffer(index_buffer, DXGI_FORMAT_R16_UINT, 0);
+    context->VSSetShader(vertex_shader, nullptr, 0);
+    context->PSSetShader(pixel_shader, nullptr, 0);
+    context->OMSetRenderTargets(1, &target_view, nullptr);
+    D3D11_BLEND_DESC blend_desc {};
+    blend_desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    ID3D11BlendState *blend_state = nullptr;
+    require(SUCCEEDED(device->CreateBlendState(&blend_desc, &blend_state)),
+        "could not create the test blend state");
+    constexpr FLOAT blend_factor[4] {0.25f, 0.5f, 0.75f, 1.0f};
+    constexpr UINT sample_mask = 0x5a5a5a5au;
+    context->OMSetBlendState(blend_state, blend_factor, sample_mask);
+    D3D11_DEPTH_STENCIL_DESC depth_desc {};
+    depth_desc.DepthEnable = FALSE;
+    depth_desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+    depth_desc.DepthFunc = D3D11_COMPARISON_ALWAYS;
+    ID3D11DepthStencilState *depth_state = nullptr;
+    require(SUCCEEDED(device->CreateDepthStencilState(&depth_desc, &depth_state)),
+        "could not create the test depth state");
+    context->OMSetDepthStencilState(depth_state, 37);
+    const D3D11_VIEWPORT viewport {0.0f, 0.0f, 8.0f, 8.0f, 0.0f, 1.0f};
+    context->RSSetViewports(1, &viewport);
+
+    neuralpass::d3d11_capture::SurfaceCapture capture;
+    require(capture.initialize(device, 8, 8), "could not initialize surface capture");
+    constexpr std::uint64_t first_material_id = 0x12345678abcdef01ull;
+    constexpr std::uint64_t material_id = 0xfedcba9876543210ull;
+    require(capture.draw(context, uv_semantic, first_material_id, 3, 1, 0, 0),
+        "capture adapter did not handle the triangle draw");
+    require(capture.draw_indexed(context, uv_semantic, material_id, 3, 1, 0, 0, 0),
+        "capture adapter did not handle the indexed triangle draw");
+    require(capture.replayed_draws() == 2, "draw variants were not each replayed once");
+
+    ID3D11PixelShader *restored_pixel_shader = nullptr;
+    context->PSGetShader(&restored_pixel_shader, nullptr, nullptr);
+    require(restored_pixel_shader == pixel_shader, "pixel shader state was not restored");
+    release(restored_pixel_shader);
+    ID3D11BlendState *restored_blend = nullptr;
+    FLOAT restored_factor[4] {};
+    UINT restored_mask = 0;
+    context->OMGetBlendState(&restored_blend, restored_factor, &restored_mask);
+    require(restored_blend == blend_state && restored_mask == sample_mask &&
+            std::equal(std::begin(restored_factor), std::end(restored_factor),
+                       std::begin(blend_factor)),
+        "blend state was not restored");
+    release(restored_blend);
+    ID3D11DepthStencilState *restored_depth = nullptr;
+    UINT restored_stencil = 0;
+    context->OMGetDepthStencilState(&restored_depth, &restored_stencil);
+    require(restored_depth == depth_state && restored_stencil == 37,
+        "depth-stencil state was not restored");
+    release(restored_depth);
+    ID3D11RenderTargetView *restored_target = nullptr;
+    context->OMGetRenderTargets(1, &restored_target, nullptr);
+    require(restored_target == target_view, "render target state was not restored");
+    release(restored_target);
+    require(!capture.finish_frame(context).has_value(),
+        "readback completed before it was queued");
+    context->Flush();
+
+    std::optional<neuralpass::SurfaceCaptureFrame> captured;
+    for (int attempt = 0; attempt < 100 && !captured; ++attempt)
+        captured = capture.finish_frame(context);
+    require(captured.has_value(), "asynchronous capture did not complete");
+    const auto &center = captured->pixels().at(4, 4);
+    require(center.material_id == material_id, "captured material ID was corrupted");
+    if (!(std::isfinite(center.u) && std::isfinite(center.v) &&
+          center.u > 0.4f && center.u < 0.7f && center.v > 0.3f && center.v < 0.8f))
+        std::cerr << "captured center UV: " << center.u << ", " << center.v << '\n';
+    require(std::isfinite(center.u) && std::isfinite(center.v) &&
+            center.u > 0.4f && center.u < 0.7f && center.v > 0.3f && center.v < 0.8f,
+        "captured interpolated UV is invalid");
+
+    capture.reset();
+    release(depth_state);
+    release(blend_state);
+    release(target_view);
+    release(target);
+    release(input_layout);
+    release(index_buffer);
+    release(vertex_buffer);
+    release(pixel_shader);
+    release(vertex_shader);
+    release(pixel_bytecode);
+    release(vertex_bytecode);
+    release(context);
+    release(device);
+}
+
+} // namespace
+
+int main() {
+    try {
+        test_triangle_replay_produces_material_uv();
+        std::cout << "NeuralPass D3D11 surface capture test passed\n";
+        return EXIT_SUCCESS;
+    } catch (const std::exception &error) {
+        std::cerr << "FAIL: " << error.what() << '\n';
+        return EXIT_FAILURE;
+    }
+}

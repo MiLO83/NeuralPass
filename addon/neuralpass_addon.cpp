@@ -3,7 +3,9 @@
 #include <reshade.hpp>
 #include <descriptor_tracking.hpp>
 
+#include "d3d11_surface_capture.hpp"
 #include "neuralpass/inference.hpp"
+#include "neuralpass/texture_baker.hpp"
 #include "neuralpass/temporal.hpp"
 #include "neuralpass/tile_scheduler.hpp"
 
@@ -20,6 +22,7 @@
 #include <fstream>
 #include <iterator>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -73,6 +76,7 @@ struct PipelineCaptureInfo {
     bool has_position = false;
 };
 std::unordered_map<std::uint64_t, PipelineCaptureInfo> g_pipeline_capture_info;
+std::unordered_map<std::uint64_t, neuralpass::d3d11_capture::UvSemantic> g_vertex_uv_outputs;
 std::unordered_map<std::uint64_t, std::uint64_t> g_pipeline_fingerprints;
 std::unordered_map<std::uint64_t, ResourceFingerprint> g_resource_fingerprints;
 std::unordered_set<std::uint64_t> g_vertex_buffers_probed;
@@ -90,7 +94,12 @@ std::atomic_uint64_t g_material_draws_seen = 0;
 std::atomic_uint64_t g_material_texture_candidates = 0;
 std::atomic_uint64_t g_restart_stable_material_draws = 0;
 std::atomic_uint64_t g_session_material_draws = 0;
+std::atomic_uint64_t g_surface_frames_captured = 0;
+std::atomic_uint64_t g_surface_pixels_captured = 0;
 std::unordered_set<std::uint64_t> g_materials_seen;
+std::unordered_set<std::uint64_t> g_restart_stable_materials;
+std::unordered_map<reshade::api::device *,
+    std::unique_ptr<neuralpass::d3d11_capture::SurfaceCapture>> g_d3d11_captures;
 
 struct BakerVertexBinding {
     reshade::api::resource buffer = {};
@@ -144,7 +153,7 @@ struct CapturedFrame {
     std::vector<std::uint8_t> rgba;
 };
 
-void on_baker_init_pipeline(reshade::api::device *, reshade::api::pipeline_layout layout,
+void on_baker_init_pipeline(reshade::api::device *device, reshade::api::pipeline_layout layout,
                             std::uint32_t subobject_count,
                             const reshade::api::pipeline_subobject *subobjects,
                             reshade::api::pipeline pipeline) {
@@ -165,6 +174,16 @@ void on_baker_init_pipeline(reshade::api::device *, reshade::api::pipeline_layou
                 if (shaders[shader].entry_point != nullptr)
                     hash_bytes(pipeline_fingerprint, shaders[shader].entry_point,
                                std::strlen(shaders[shader].entry_point));
+            }
+            if (device->get_api() == reshade::api::device_api::d3d11 &&
+                subobject.type == reshade::api::pipeline_subobject_type::vertex_shader &&
+                subobject.count != 0) {
+                const auto uv = neuralpass::d3d11_capture::inspect_uv_output(
+                    shaders[0].code, shaders[0].code_size);
+                if (uv.valid()) {
+                    std::lock_guard lock(g_baker_probe_mutex);
+                    g_vertex_uv_outputs[pipeline.handle] = uv;
+                }
             }
         }
         if (subobject.type == reshade::api::pipeline_subobject_type::input_layout) {
@@ -299,6 +318,7 @@ void on_baker_destroy_resource(reshade::api::device *, reshade::api::resource re
 void on_baker_destroy_pipeline(reshade::api::device *, reshade::api::pipeline pipeline) {
     std::lock_guard lock(g_baker_probe_mutex);
     g_pipeline_fingerprints.erase(pipeline.handle);
+    g_vertex_uv_outputs.erase(pipeline.handle);
     g_pipeline_capture_info.erase(pipeline.handle);
     g_uv_pipelines.erase(pipeline.handle);
 }
@@ -592,11 +612,12 @@ void probe_pretransform_buffer(reshade::api::command_list *command_list,
     command_list->get_device()->unmap_buffer_region(binding.buffer);
 }
 
-bool record_baker_draw(reshade::api::command_list *command_list,
-                       std::uint32_t vertex_or_index_count, std::uint32_t instance_count) {
+MaterialKey record_baker_draw(reshade::api::command_list *command_list,
+                              std::uint32_t vertex_or_index_count,
+                              std::uint32_t instance_count) {
     ++g_draws_seen;
     const auto *state = command_list->get_private_data<BakerCommandState>();
-    if (!state) return false;
+    if (!state) return {};
     bool uv_pipeline = false;
     {
         std::lock_guard lock(g_baker_probe_mutex);
@@ -615,33 +636,73 @@ bool record_baker_draw(reshade::api::command_list *command_list,
         const auto material = current_material_id(command_list->get_device(), *state);
         if (material.value != 0) {
             ++g_material_draws_seen;
-            if (material.restart_stable) ++g_restart_stable_material_draws;
+            if (material.restart_stable) {
+                ++g_restart_stable_material_draws;
+                std::lock_guard lock(g_baker_probe_mutex);
+                g_restart_stable_materials.insert(material.value);
+            }
             else ++g_session_material_draws;
             std::lock_guard lock(g_baker_probe_mutex);
             g_materials_seen.insert(material.value);
         }
+        return material;
     }
-    return false;
+    return {};
 }
 
 bool on_baker_draw(reshade::api::command_list *command_list, std::uint32_t vertex_count,
-                   std::uint32_t instance_count, std::uint32_t, std::uint32_t) {
-    return record_baker_draw(command_list, vertex_count, instance_count);
+                   std::uint32_t instance_count, std::uint32_t first_vertex,
+                   std::uint32_t first_instance) {
+    const auto material = record_baker_draw(command_list, vertex_count, instance_count);
+    if (material.value == 0 || command_list->get_device()->get_api() !=
+            reshade::api::device_api::d3d11) return false;
+    const auto *state = command_list->get_private_data<BakerCommandState>();
+    neuralpass::d3d11_capture::UvSemantic uv;
+    neuralpass::d3d11_capture::SurfaceCapture *capture = nullptr;
+    {
+        std::lock_guard lock(g_baker_probe_mutex);
+        if (const auto found = g_vertex_uv_outputs.find(state->vertex_pipeline.handle);
+            found != g_vertex_uv_outputs.end()) uv = found->second;
+        if (const auto found = g_d3d11_captures.find(command_list->get_device());
+            found != g_d3d11_captures.end()) capture = found->second.get();
+    }
+    return capture != nullptr && uv.valid() && capture->draw(
+        reinterpret_cast<ID3D11DeviceContext *>(command_list->get_native()), uv,
+        material.value, vertex_count, instance_count, first_vertex, first_instance);
 }
 
 bool on_baker_draw_indexed(reshade::api::command_list *command_list,
                            std::uint32_t index_count, std::uint32_t instance_count,
-                           std::uint32_t, std::int32_t, std::uint32_t) {
-    return record_baker_draw(command_list, index_count, instance_count);
+                           std::uint32_t first_index, std::int32_t vertex_offset,
+                           std::uint32_t first_instance) {
+    const auto material = record_baker_draw(command_list, index_count, instance_count);
+    if (material.value == 0 || command_list->get_device()->get_api() !=
+            reshade::api::device_api::d3d11) return false;
+    const auto *state = command_list->get_private_data<BakerCommandState>();
+    neuralpass::d3d11_capture::UvSemantic uv;
+    neuralpass::d3d11_capture::SurfaceCapture *capture = nullptr;
+    {
+        std::lock_guard lock(g_baker_probe_mutex);
+        if (const auto found = g_vertex_uv_outputs.find(state->vertex_pipeline.handle);
+            found != g_vertex_uv_outputs.end()) uv = found->second;
+        if (const auto found = g_d3d11_captures.find(command_list->get_device());
+            found != g_d3d11_captures.end()) capture = found->second.get();
+    }
+    return capture != nullptr && uv.valid() && capture->draw_indexed(
+        reinterpret_cast<ID3D11DeviceContext *>(command_list->get_native()), uv,
+        material.value, index_count, instance_count, first_index, vertex_offset,
+        first_instance);
 }
 
 struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::mutex mutex;
     std::condition_variable_any wake;
     CapturedFrame pending;
+    std::optional<neuralpass::SurfaceCaptureFrame> pending_surface;
     std::vector<std::uint8_t> ready_styled;
     std::vector<std::uint8_t> ready_valid;
     std::deque<std::vector<std::uint8_t>> bridge_ready;
+    std::unordered_map<std::uint64_t, neuralpass::SurfaceCaptureFrame> surface_ready;
     bool has_pending = false;
     bool has_ready = false;
     std::uint32_t ready_width = 0;
@@ -869,6 +930,20 @@ Image<Color> unpack(const CapturedFrame &frame) {
     return image;
 }
 
+std::uint8_t byte(float value);
+
+CapturedFrame pack(const Image<Color> &image) {
+    CapturedFrame frame {image.width(), image.height(),
+        std::vector<std::uint8_t>(image.size() * 4)};
+    for (std::size_t index = 0; index < image.size(); ++index) {
+        frame.rgba[index * 4 + 0] = byte(image.pixels()[index].r);
+        frame.rgba[index * 4 + 1] = byte(image.pixels()[index].g);
+        frame.rgba[index * 4 + 2] = byte(image.pixels()[index].b);
+        frame.rgba[index * 4 + 3] = byte(image.pixels()[index].a);
+    }
+    return frame;
+}
+
 std::uint8_t byte(float value) {
     return static_cast<std::uint8_t>(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
 }
@@ -883,6 +958,14 @@ Image<Color> extract(const Image<Color> &image, const neuralpass::Rect &rect) {
 
 void process_frames(RuntimeState *state, std::stop_token token) {
     HistoryFrame history;
+    neuralpass::MaterialTextureBaker material_baker;
+    neuralpass::SceneTransitionTracker scene_transitions;
+    const auto atlas_directory = g_addon_directory / "NeuralPassCache" / "atlases";
+    const auto loaded_atlases = material_baker.load_cache(atlas_directory);
+    if (loaded_atlases.loaded != 0)
+        reshade::log::message(reshade::log::level::info,
+            ("NeuralPass loaded " + std::to_string(loaded_atlases.loaded) +
+             " persistent material atlases.").c_str());
     std::unique_ptr<neuralpass::InferenceBackend> backend;
     char *preset_value = nullptr;
     std::size_t preset_length = 0;
@@ -918,18 +1001,53 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         std::lock_guard lock(state->mutex);
         state->backend_name = std::string(backend->name());
     }
+    struct BridgeBakeContext {
+        std::uint64_t sequence = 0;
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+        neuralpass::MaterialTextureBakePlan plan;
+        std::vector<neuralpass::SurfaceCorrespondence> correspondence;
+    };
+    std::optional<BridgeBakeContext> bridge_bake;
+    Image<Color> previous_scene;
 
     while (!token.stop_requested()) {
         CapturedFrame frame;
+        std::optional<neuralpass::SurfaceCaptureFrame> surface;
         {
             std::unique_lock lock(state->mutex);
             state->wake.wait(lock, token, [&] { return state->stop || state->has_pending; });
             if (state->stop || token.stop_requested()) break;
             frame = std::move(state->pending);
+            surface = std::move(state->pending_surface);
+            state->pending_surface.reset();
             state->has_pending = false;
         }
+        const Image<Color> current = unpack(frame);
+        const auto correspondence = surface && surface->width() == frame.width &&
+                surface->height() == frame.height
+            ? surface->correspondences() : std::vector<neuralpass::SurfaceCorrespondence> {};
+        HistoryFrame cut_reference;
+        cut_reference.source = previous_scene;
+        const bool visual_cut = !previous_scene.empty() &&
+            neuralpass::is_camera_cut(current, cut_reference);
+        previous_scene = current;
+        const auto transition = scene_transitions.observe(visual_cut, correspondence);
+        if (transition == neuralpass::SceneTransition::scene_change) {
+            std::vector<std::uint64_t> stable;
+            {
+                std::lock_guard lock(g_baker_probe_mutex);
+                stable.assign(g_restart_stable_materials.begin(), g_restart_stable_materials.end());
+            }
+            (void)material_baker.save_cache(atlas_directory, stable);
+            material_baker.reset_scene();
+        } else if (transition == neuralpass::SceneTransition::camera_cut) {
+            material_baker.invalidate_in_flight();
+        }
         if (state->stream_bridge.load()) {
-            const auto resized = resize_nearest(frame, k_stream_width, k_stream_height);
+            auto current_plan = material_baker.plan(current, correspondence);
+            const auto seeded = pack(current_plan.composite);
+            const auto resized = resize_nearest(seeded, k_stream_width, k_stream_height);
             const auto now = GetTickCount64();
             // A latest-frame mailbox feeds the lightweight optical-flow path independently
             // of diffusion. Cap it near 60 Hz to avoid needless NTFS traffic at high FPS.
@@ -943,7 +1061,9 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             CapturedFrame live;
             std::uint64_t live_sequence = 0;
             if (read_live_frame(state->live_received.load(), live, live_sequence)) {
-                publish_bridge_results(state, {std::move(live)}, frame.width, frame.height);
+                auto full_live = resize_nearest(live, frame.width, frame.height);
+                auto reconstructed = material_baker.reconstruct(unpack(full_live), correspondence);
+                publish_bridge_results(state, {pack(reconstructed)}, frame.width, frame.height);
                 state->live_received = live_sequence;
             }
 
@@ -960,18 +1080,32 @@ void process_frames(RuntimeState *state, std::stop_token token) {
                     state->bridge_received = received;
                     // The motion mailbox will immediately warp this new anchor. Publish only
                     // the final diffusion result as a fallback, never the old RIFE burst.
-                    if (!results.empty())
-                        publish_bridge_results(state, {std::move(results.back())}, frame.width, frame.height);
+                    if (!results.empty() && bridge_bake && bridge_bake->sequence == sent) {
+                        auto generated = resize_nearest(results.back(), bridge_bake->width,
+                                                        bridge_bake->height);
+                        auto generated_image = unpack(generated);
+                        const auto baked = material_baker.commit(
+                            bridge_bake->plan, generated_image, bridge_bake->correspondence);
+                        if (!baked.stale) {
+                            generated_image = material_baker.reconstruct(
+                                generated_image, bridge_bake->correspondence);
+                            publish_bridge_results(state, {pack(generated_image)},
+                                bridge_bake->width, bridge_bake->height);
+                        }
+                        bridge_bake.reset();
+                    }
                 }
             }
             if (sent == received) {
                 const auto sequence = std::max<std::uint64_t>(GetTickCount64(), sent + 1);
-                if (write_bridge_frame(resized, sequence))
+                if (write_bridge_frame(resized, sequence)) {
                     state->bridge_sent = sequence;
+                    bridge_bake = BridgeBakeContext {sequence, frame.width, frame.height,
+                        std::move(current_plan), correspondence};
+                }
             }
             continue;
         }
-        const Image<Color> current = unpack(frame);
         const int requested = state->requested_preset.load();
         if (requested != active_preset) {
             active_preset = requested;
@@ -981,12 +1115,9 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             state->backend_name = std::string(backend->name());
         }
         if (state->reset_requested.exchange(false)) history = {};
-        const auto valid_count = static_cast<std::size_t>(std::count_if(
-            history.valid.pixels().begin(), history.valid.pixels().end(), [](std::uint8_t v) { return v != 0; }));
-        const bool enough_history = !history.valid.empty() && valid_count * 5 >= history.valid.size() * 4;
         const bool sticky_history = state->sticky_history.load();
         const bool reset = history.source.width() != frame.width || history.source.height() != frame.height ||
-                           (!sticky_history && enough_history && neuralpass::is_camera_cut(current, history));
+                           (!sticky_history && visual_cut);
         if (reset) {
             history.source = current;
             history.styled = current;
@@ -1001,6 +1132,18 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             auto temporal = neuralpass::reproject_history(
                 current, nullptr, nullptr, history, temporal_settings);
             history = std::move(temporal.reprojected);
+        }
+
+        const auto bake_plan = material_baker.plan(current, correspondence);
+        for (const auto &sample : correspondence) {
+            if (sample.screen_x >= frame.width || sample.screen_y >= frame.height) continue;
+            if (bake_plan.reveal_mask.at(sample.screen_x, sample.screen_y) == 0) {
+                history.styled.at(sample.screen_x, sample.screen_y) =
+                    bake_plan.composite.at(sample.screen_x, sample.screen_y);
+                history.valid.at(sample.screen_x, sample.screen_y) = 1;
+            } else {
+                history.valid.at(sample.screen_x, sample.screen_y) = 0;
+            }
         }
 
         Image<std::uint8_t> dirty(frame.width, frame.height, 0);
@@ -1031,6 +1174,18 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             }
         }
 
+        std::vector<neuralpass::SurfaceCorrespondence> generated_reveals;
+        generated_reveals.reserve(correspondence.size());
+        for (const auto &sample : correspondence)
+            if (sample.screen_x < frame.width && sample.screen_y < frame.height &&
+                bake_plan.reveal_mask.at(sample.screen_x, sample.screen_y) != 0 &&
+                history.valid.at(sample.screen_x, sample.screen_y) != 0)
+                generated_reveals.push_back(sample);
+        const auto baked = material_baker.commit(
+            bake_plan, history.styled, generated_reveals);
+        if (!baked.stale && baked.accepted != 0)
+            history.styled = material_baker.reconstruct(history.styled, correspondence);
+
         std::vector<std::uint8_t> styled(history.styled.size() * 4);
         std::vector<std::uint8_t> valid(history.valid.size() * 4);
         for (std::size_t i = 0; i < history.styled.size(); ++i) {
@@ -1051,6 +1206,16 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             ++state->completed;
         }
     }
+
+    std::vector<std::uint64_t> stable;
+    {
+        std::lock_guard lock(g_baker_probe_mutex);
+        stable.assign(g_restart_stable_materials.begin(), g_restart_stable_materials.end());
+    }
+    const auto saved = material_baker.save_cache(atlas_directory, stable);
+    if (saved.rejected != 0)
+        reshade::log::message(reshade::log::level::warning,
+            "NeuralPass could not save one or more material atlas snapshots.");
 }
 
 void find_effect_variables(reshade::api::effect_runtime *runtime) {
@@ -1143,6 +1308,20 @@ void on_init(reshade::api::effect_runtime *runtime) {
                                               &state->copy_fence))
         reshade::log::message(reshade::log::level::error, "NeuralPass could not create its copy fence.");
     state->worker = std::jthread([state](std::stop_token token) { process_frames(state, token); });
+    if (runtime->get_device()->get_api() == reshade::api::device_api::d3d11) {
+        const auto back_buffer = runtime->get_back_buffer(0);
+        const auto desc = runtime->get_device()->get_resource_desc(back_buffer);
+        auto capture = std::make_unique<neuralpass::d3d11_capture::SurfaceCapture>();
+        if (capture->initialize(
+                reinterpret_cast<ID3D11Device *>(runtime->get_device()->get_native()),
+                desc.texture.width, desc.texture.height)) {
+            std::lock_guard lock(g_baker_probe_mutex);
+            g_d3d11_captures[runtime->get_device()] = std::move(capture);
+        } else {
+            reshade::log::message(reshade::log::level::warning,
+                "NeuralPass could not initialize the D3D11 mesh-UV capture surface.");
+        }
+    }
     find_effect_variables(runtime);
 }
 
@@ -1156,6 +1335,15 @@ void on_destroy(reshade::api::effect_runtime *runtime) {
         state->wake.notify_all();
         if (state->worker.joinable()) state->worker.join();
         runtime->get_command_queue()->wait_idle();
+        std::unique_ptr<neuralpass::d3d11_capture::SurfaceCapture> capture;
+        {
+            std::lock_guard lock(g_baker_probe_mutex);
+            if (const auto found = g_d3d11_captures.find(runtime->get_device());
+                found != g_d3d11_captures.end()) {
+                capture = std::move(found->second);
+                g_d3d11_captures.erase(found);
+            }
+        }
         destroy_readback(runtime, *state);
         if (state->copy_fence != 0) runtime->get_device()->destroy_fence(state->copy_fence);
     }
@@ -1182,12 +1370,14 @@ void on_destroy(reshade::api::effect_runtime *runtime) {
                << "restart_stable_material_draws=" << g_restart_stable_material_draws.load() << '\n'
                << "session_material_draws=" << g_session_material_draws.load() << '\n'
                << "material_texture_candidates=" << g_material_texture_candidates.load() << '\n'
+               << "surface_frames_captured=" << g_surface_frames_captured.load() << '\n'
+               << "surface_pixels_captured=" << g_surface_pixels_captured.load() << '\n'
                << "unique_materials=" << material_count << '\n';
     }
     runtime->destroy_private_data<RuntimeState>();
 }
 
-void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::command_list *,
+void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::command_list *command_list,
                       reshade::api::resource_view rtv, reshade::api::resource_view) {
     auto *state = runtime->get_private_data<RuntimeState>();
     if (!state) return;
@@ -1195,6 +1385,43 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
     auto *queue = runtime->get_command_queue();
     const auto source = device->get_resource_from_view(rtv);
     const auto source_desc = device->get_resource_desc(source);
+    if (device->get_api() == reshade::api::device_api::d3d11 && command_list != nullptr) {
+        neuralpass::d3d11_capture::SurfaceCapture *capture = nullptr;
+        {
+            std::scoped_lock lock(g_baker_probe_mutex, state->mutex);
+            if (const auto found = g_d3d11_captures.find(device);
+                found != g_d3d11_captures.end()) {
+                capture = found->second.get();
+                if (capture->width() != source_desc.texture.width ||
+                    capture->height() != source_desc.texture.height) {
+                    state->surface_ready.clear();
+                    state->pending_surface.reset();
+                    if (!capture->initialize(
+                            reinterpret_cast<ID3D11Device *>(device->get_native()),
+                            source_desc.texture.width, source_desc.texture.height)) {
+                        reshade::log::message(reshade::log::level::warning,
+                            "NeuralPass could not resize the D3D11 mesh-UV capture surface.");
+                    }
+                }
+            }
+        }
+        if (capture != nullptr) {
+            auto surface = capture->finish_frame(
+                reinterpret_cast<ID3D11DeviceContext *>(command_list->get_native()));
+            if (surface) {
+                std::uint64_t supported = 0;
+                for (const auto &pixel : surface->pixels().pixels())
+                    if (pixel.material_id != 0 && pixel.confidence > 0.0f) ++supported;
+                ++g_surface_frames_captured;
+                g_surface_pixels_captured += supported;
+                std::lock_guard lock(state->mutex);
+                state->surface_ready.insert_or_assign(
+                    surface->frame_index(), std::move(*surface));
+                while (state->surface_ready.size() > 6)
+                    state->surface_ready.erase(state->surface_ready.begin());
+            }
+        }
+    }
     if (state->copy_fence == 0 || !ensure_readback(runtime, *state, source_desc)) return;
     const auto width = state->capture_width;
     const auto height = state->capture_height;
@@ -1256,6 +1483,13 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
             std::lock_guard lock(state->mutex);
             if (!state->has_pending) {
                 state->pending = std::move(captured);
+                if (const auto surface = state->surface_ready.find(state->next_read);
+                    surface != state->surface_ready.end()) {
+                    state->pending_surface = std::move(surface->second);
+                    state->surface_ready.erase(surface);
+                } else {
+                    state->pending_surface.reset();
+                }
                 state->has_pending = true;
                 ++state->submitted;
                 state->wake.notify_one();
@@ -1323,10 +1557,28 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         static_cast<unsigned long long>(g_session_material_draws.load()));
     ImGui::Text("Persistent texture candidates sampled: %llu",
         static_cast<unsigned long long>(g_material_texture_candidates.load()));
+    std::uint64_t replayed_draws = 0;
+    std::uint64_t capture_drops = 0;
+    {
+        std::lock_guard lock(g_baker_probe_mutex);
+        if (const auto found = g_d3d11_captures.find(runtime->get_device());
+            found != g_d3d11_captures.end()) {
+            replayed_draws = found->second->replayed_draws();
+            capture_drops = found->second->dropped_frames();
+        }
+    }
+    ImGui::Text("D3D11 UV replay draws: %llu  Readback drops: %llu",
+        static_cast<unsigned long long>(replayed_draws),
+        static_cast<unsigned long long>(capture_drops));
+    ImGui::Text("Surface frames: %llu  Supported pixels: %llu",
+        static_cast<unsigned long long>(g_surface_frames_captured.load()),
+        static_cast<unsigned long long>(g_surface_pixels_captured.load()));
     if (g_uv_draws_seen.load() == 0)
         ImGui::TextWrapped("Waiting for an explicit or location-inferred mesh UV vertex input.");
     else
-        ImGui::TextWrapped("UV-bearing mesh draws detected; correspondence capture is available for the next baker stage.");
+        ImGui::TextWrapped(runtime->get_device()->get_api() == reshade::api::device_api::d3d11
+            ? "D3D11 UV-bearing draws are replayed into the asynchronous surface capture."
+            : "UV-bearing draws detected; this API still needs its replay adapter.");
     int budget = static_cast<int>(state->tile_budget.load());
     if (ImGui::SliderInt("Tiles per worker update", &budget, 1, 16))
         state->tile_budget = static_cast<std::uint32_t>(budget);

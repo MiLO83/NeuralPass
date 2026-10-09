@@ -92,6 +92,30 @@ restart-stable material keys when upload contents are observable. Descriptor or
 resource handles are used only to avoid collisions inside the current process;
 those keys are never admitted to the cross-launch atlas store.
 
+### D3D11 replay adapter
+
+The first live adapter uses draw replay rather than modifying the game's pixel
+shader. D3D reflection selects a floating-point `TEXCOORD` from the vertex
+shader's output signature. NeuralPass executes the original draw exactly once,
+then temporarily binds a capture pixel shader and an `RGBA32_UINT` target while
+retaining vertex state, resources, viewport, rasterization, and depth. The
+capture shader stores the 64-bit material key and bit-exact interpolated UV.
+Blend, depth/stencil, render targets, UAVs, and the original pixel shader are
+restored before control returns to the game.
+
+Capture uses equality depth testing with writes disabled, so replayed fragments
+must match the surface written by the original draw. Three staging textures and
+event queries provide readback without flushing or waiting. Each staging slot
+carries the same monotonically increasing frame index as the framebuffer copy;
+the worker only bakes matching pairs. Shader linkage registers are reflected
+again after compiling the capture shader—if its UV register does not exactly
+match the game's vertex output, the draw is rejected rather than mispainted.
+The WARP integration test covers indexed and non-indexed draws, decoded IDs and
+UVs, asynchronous readback, and restoration of the pixel shader, render target,
+blend state, and depth/stencil state. Since replay replaces the application's
+pixel shader, alpha-test and `discard` behavior cannot yet be mirrored; those
+materials remain a known compatibility gap until shader instrumentation exists.
+
 The atlas store serializes color, observation weight, and the three-state
 coverage plane. Each payload is versioned and checksummed. Saves publish a new
 uniquely named generation only after the temporary file is complete; startup

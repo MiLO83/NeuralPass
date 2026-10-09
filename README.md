@@ -139,12 +139,27 @@ coverage mask, fills only unseen texels in texture space, and reconstructs the
 visible framebuffer by sampling that same atlas. This keeps the wrapped mesh
 view and the unwrapped texture representation consistent.
 
-The ReShade add-on currently probes UV-bearing draw pipelines, but generic
-per-pixel material-ID/UV capture and replacement-texture binding adapters are
-still required before the baker affects a running game. Unsupported pipelines
-retain the screen-space restyling path rather than receiving guessed UV data.
-The canonical capture and multi-material baker are API-neutral; D3D9/10/11,
-D3D12, and Vulkan adapters emit the same validated surface-frame contract.
+The ReShade add-on has an experimental D3D11 surface adapter. It reflects the
+vertex shader's rasterized `TEXCOORD`, executes the game's draw once, replays it
+with a capture pixel shader into `RGBA32_UINT`, and asynchronously decodes
+`{material ID low/high, U bits, V bits}` through a three-slot staging ring. A
+Windows WARP integration test renders a real triangle and verifies its decoded
+64-bit material ID and interpolated UV. Capture frames and framebuffer frames
+are paired by GPU sequence number before reveal-only atlas generation.
+
+D3D9/10, D3D12, and Vulkan still require equivalent adapters, and the D3D11
+path needs broad real-game compatibility testing. Unsupported APIs, shader
+signatures, deferred contexts, render-target sizes, and MSAA draws retain the
+screen-space path instead of receiving guessed UV data. The canonical capture
+and multi-material baker remain API-neutral so every adapter emits the same
+validated surface-frame contract.
+
+| Graphics API | Geometry capture status |
+| --- | --- |
+| D3D11 | Experimental draw replay; automated WARP coverage |
+| D3D9 / D3D10 | Adapter required |
+| D3D12 | Adapter required |
+| Vulkan | Adapter required |
 
 Atlas snapshots use a versioned, checksummed `.npatlas` format. Writes create a
 new generation and rename it only after the complete payload is flushed, so an
@@ -158,6 +173,11 @@ backend without starting the game.
 
 ## Important limitations
 
+- Geometry-aware persistent baking is currently experimental on D3D11 only;
+  this is not yet a cross-API production release.
+- The D3D11 replay shader cannot reproduce application pixel-shader `discard`
+  or alpha-test logic yet, so cutout/translucent materials may produce invalid
+  correspondence around transparent texels.
 - v0.1 supports SDR RGBA8 capture. HDR/scRGB is not processed correctly yet.
 - The screen-space fallback cannot follow large camera motion as accurately as
   engine motion vectors; changed pixels are invalidated and restyled instead.
@@ -177,3 +197,10 @@ future UVW/object-ID cache or WinML backend without changing the scheduler.
 
 The `DownToEarth` TinyUNet work informed the bounded residual `photo-detail`
 preview, but NeuralPass does not import code or weights from another checkout.
+
+## Credits
+
+- Project direction and prompting: **MiLO83**
+- Architecture and implementation: **OpenAI Codex**, working collaboratively
+  with MiLO83
+- ReShade and its add-on API: Patrick Mours and ReShade contributors
