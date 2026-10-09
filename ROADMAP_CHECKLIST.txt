@@ -99,19 +99,21 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     a three-slot fence/readback ring. WARP validates resources, barriers, queue ordering,
     and decoded readback. Bounded-table RGBA8/BGRA8 replacement tracks source states,
     copies only covered rows, and has a WARP descriptor isolation/restoration test;
-    full add-on replay and real-game evidence remain.
+    actual backend replay restores the PSO and render target under WARP; production
+    companion-PSO creation inside ReShade and real-game evidence remain.
 [ ] Production Vulkan x86/x64 capture and replacement.
 [~] Support indexed, non-indexed, instanced, and indirect draws.
     Evidence: D3D11 handles direct and indirect indexed/non-indexed instanced draws,
     with application draw, capture replay, and replacement verified under WARP.
     D3D12 now has matching direct/indexed/indirect dispatch code and WARP-tested command
-    signatures/readback resources; full replay evidence remains for D3D12 and other APIs.
+    signatures/readback resources and an actual direct backend replay; production
+    companion-PSO creation evidence remains for D3D12 and all evidence for other APIs.
 [~] Restore every touched pipeline, descriptor, target, depth, UAV, and dynamic state.
     Evidence: D3D11 replay restores pixel shader and dynamic-linkage instances,
     selected source SRV, MRTs, depth view/state, blend factors/sample mask, stencil
     reference, and output-merger UAV bindings under WARP. D3D12 restores PSO and MRT/DSV
-    bindings, clones the one replaced descriptor table, and restores the original table;
-    a full companion-PSO state test remains.
+    bindings, clones the one replaced descriptor table, and restores the original table.
+    WARP verifies backend PSO/RTV restoration and descriptor-table restoration.
 [~] Implement aggressive base-color binding selection and manual correction.
     Evidence: D3D11 ranks bound sampleable 2D color SRVs and captures the selected
     source texel with its sampler; the overlay provides a per-binding SRV-slot
@@ -198,8 +200,8 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [ ] UV seams, overlapping UVs, alpha cutouts, HDR, and depth conflicts remain isolated.
 [~] D3D9 reference, D3D10/11/12 WARP, and Vulkan SwiftShader suites pass.
     Evidence: D3D11 replay/replacement and D3D12 resource/barrier/fence/readback plus
-    native descriptor-isolation WARP suites pass; D3D12 full add-on replay, D3D9/10,
-    and Vulkan SwiftShader remain.
+    native descriptor-isolation and backend replay WARP suites pass; production-created
+    D3D12 companion PSOs, D3D9/10, and Vulkan SwiftShader remain.
 [ ] Resize, device-loss, corrupt-cache, and worker-restart tests pass.
 [ ] Steel Nomad D3D12 stress validation passes.
 [ ] Each API completes a 60-minute soak without crash or device removal.

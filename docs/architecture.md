@@ -168,7 +168,9 @@ attachments inside an active pass. For bounded descriptor tables, RGBA8/BGRA8
 replacement clones the complete table into add-on-owned storage, updates only the
 selected SRV, binds it for the application draw, then restores the original table
 before capture. Source-state tracking and covered-row uploads preserve untouched
-texels. WARP verifies native descriptor isolation and restoration. Full add-on replay,
+texels. WARP verifies native descriptor isolation and restoration. An actual backend
+replay test verifies application draw, companion draw, PSO
+restoration, and render-target restoration. Production-created companion PSOs,
 DXIL-specific reflection beyond the input-declaration fallback, device-loss stress,
 and real-game validation remain required before D3D12 can be promoted.
 

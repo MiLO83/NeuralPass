@@ -27,6 +27,13 @@ public:
                            const reshade::api::pipeline_subobject *subobjects,
                            reshade::api::pipeline pipeline);
     void unregister_pipeline(reshade::api::pipeline pipeline);
+    // Installs a borrowed companion PSO for native WARP replay validation.
+    // Production uses register_pipeline and builds this variant itself.
+    void register_prebuilt_variant(std::uint64_t source_pipeline,
+                                   const capture::UvInput &uv,
+                                   std::uint64_t material_id,
+                                   const capture::DrawCommand &draw,
+                                   std::uint64_t capture_pipeline);
     [[nodiscard]] capture::GraphicsBackend backend() const noexcept override;
     [[nodiscard]] capture::CaptureCapabilities capabilities() const noexcept override;
     [[nodiscard]] bool initialize(void *native_device, std::uint32_t width,

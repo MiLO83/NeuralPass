@@ -864,6 +864,20 @@ void SurfaceCapture::unregister_pipeline(reshade::api::pipeline pipeline) {
     }
 }
 
+void SurfaceCapture::register_prebuilt_variant(
+    std::uint64_t source_pipeline, const capture::UvInput &uv,
+    std::uint64_t material_id, const capture::DrawCommand &draw,
+    std::uint64_t capture_pipeline) {
+    if (impl_ == nullptr || source_pipeline == 0 || material_id == 0 ||
+        capture_pipeline == 0) return;
+    std::lock_guard lock(impl_->mutex);
+    PipelineKey key {source_pipeline, material_id, uv.name, uv.index,
+        draw.source_register, draw.source_space, draw.sampler_register,
+        draw.sampler_space, draw.source_sampleable};
+    impl_->variants.insert_or_assign(
+        std::move(key), reshade::api::pipeline {capture_pipeline});
+}
+
 capture::GraphicsBackend SurfaceCapture::backend() const noexcept {
     return capture::GraphicsBackend::d3d12;
 }
