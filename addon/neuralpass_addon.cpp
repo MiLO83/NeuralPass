@@ -740,6 +740,8 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::vector<std::uint8_t> ready_valid;
     std::deque<std::vector<std::uint8_t>> bridge_ready;
     std::unordered_map<std::uint64_t, neuralpass::SurfaceCaptureFrame> surface_ready;
+    std::unordered_map<std::uint64_t,
+        std::vector<neuralpass::d3d11_capture::ReplacementMip>> ready_replacements;
     bool has_pending = false;
     bool has_ready = false;
     std::uint32_t ready_width = 0;
@@ -760,6 +762,8 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::atomic_int scene_command = static_cast<int>(ManualSceneCommand::none);
     std::atomic_uint64_t active_scene_identity = 0;
     std::atomic_uint64_t scene_generation = 1;
+    std::atomic_uint64_t replacement_epoch = 1;
+    std::uint64_t applied_replacement_epoch = 0;
     std::atomic_int scene_transition = static_cast<int>(neuralpass::SceneTransition::stable);
     std::uint64_t selected_binding = 0;
     int selected_source_slot = -1;
@@ -988,6 +992,43 @@ CapturedFrame pack(const Image<Color> &image) {
     return frame;
 }
 
+void publish_replacement_snapshots(
+    RuntimeState &state, const neuralpass::MaterialTextureBaker &baker,
+    std::span<const neuralpass::SurfaceCorrespondence> samples,
+    std::unordered_set<std::uint64_t> &published, bool force) {
+    std::unordered_set<std::uint64_t> material_ids;
+    for (const auto &sample : samples)
+        if (sample.material_id != 0) material_ids.insert(sample.material_id);
+    std::unordered_map<std::uint64_t,
+        std::vector<neuralpass::d3d11_capture::ReplacementMip>> snapshots;
+    for (const auto material_id : material_ids) {
+        if (!force && published.contains(material_id)) continue;
+        const auto *atlas = baker.find(material_id);
+        if (atlas == nullptr) continue;
+        std::vector<neuralpass::d3d11_capture::ReplacementMip> packed;
+        for (const auto &mip : atlas->generate_mips()) {
+            neuralpass::d3d11_capture::ReplacementMip output;
+            output.width = mip.color.width();
+            output.height = mip.color.height();
+            output.rgba.resize(mip.color.size() * 4);
+            output.coverage = mip.coverage.pixels();
+            for (std::size_t index = 0; index < mip.color.size(); ++index) {
+                output.rgba[index * 4 + 0] = byte(mip.color.pixels()[index].r);
+                output.rgba[index * 4 + 1] = byte(mip.color.pixels()[index].g);
+                output.rgba[index * 4 + 2] = byte(mip.color.pixels()[index].b);
+                output.rgba[index * 4 + 3] = byte(mip.color.pixels()[index].a);
+            }
+            packed.push_back(std::move(output));
+        }
+        snapshots.emplace(material_id, std::move(packed));
+        published.insert(material_id);
+    }
+    if (snapshots.empty()) return;
+    std::lock_guard lock(state.mutex);
+    for (auto &[material_id, mips] : snapshots)
+        state.ready_replacements.insert_or_assign(material_id, std::move(mips));
+}
+
 std::uint8_t byte(float value) {
     return static_cast<std::uint8_t>(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
 }
@@ -1088,6 +1129,7 @@ void process_frames(RuntimeState *state, std::stop_token token) {
     std::optional<BridgeBakeContext> bridge_bake;
     Image<Color> previous_scene;
     std::optional<neuralpass::SurfaceCaptureFrame> previous_surface;
+    std::unordered_set<std::uint64_t> published_replacements;
 
     while (!token.stop_requested()) {
         CapturedFrame frame;
@@ -1147,6 +1189,12 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         if (transition == neuralpass::SceneTransition::scene_change) {
             save_active_scene();
             material_baker.reset_scene();
+            published_replacements.clear();
+            {
+                std::lock_guard lock(state->mutex);
+                state->ready_replacements.clear();
+            }
+            ++state->replacement_epoch;
             active_scene.reset();
             active_scene_materials.clear();
             state->active_scene_identity = 0;
@@ -1171,6 +1219,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         state->scene_generation = scene_transitions.scene_key().generation;
         if (state->stream_bridge.load()) {
             auto current_plan = material_baker.plan(current, correspondence);
+            publish_replacement_snapshots(
+                *state, material_baker, correspondence, published_replacements, false);
             const auto seeded = pack(current_plan.composite);
             const auto resized = resize_nearest(seeded, k_stream_width, k_stream_height);
             const auto now = GetTickCount64();
@@ -1213,6 +1263,9 @@ void process_frames(RuntimeState *state, std::stop_token token) {
                         const auto baked = material_baker.commit(
                             bridge_bake->plan, generated_image, bridge_bake->correspondence);
                         if (!baked.stale) {
+                            if (baked.accepted != 0)
+                                publish_replacement_snapshots(*state, material_baker,
+                                    bridge_bake->correspondence, published_replacements, true);
                             generated_image = material_baker.reconstruct(
                                 generated_image, bridge_bake->correspondence);
                             publish_bridge_results(state, {pack(generated_image)},
@@ -1262,6 +1315,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         }
 
         const auto bake_plan = material_baker.plan(current, correspondence);
+        publish_replacement_snapshots(
+            *state, material_baker, correspondence, published_replacements, false);
         for (const auto &sample : correspondence) {
             if (sample.screen_x >= frame.width || sample.screen_y >= frame.height) continue;
             if (bake_plan.reveal_mask.at(sample.screen_x, sample.screen_y) == 0) {
@@ -1310,8 +1365,11 @@ void process_frames(RuntimeState *state, std::stop_token token) {
                 generated_reveals.push_back(sample);
         const auto baked = material_baker.commit(
             bake_plan, history.styled, generated_reveals);
-        if (!baked.stale && baked.accepted != 0)
+        if (!baked.stale && baked.accepted != 0) {
+            publish_replacement_snapshots(
+                *state, material_baker, generated_reveals, published_replacements, true);
             history.styled = material_baker.reconstruct(history.styled, correspondence);
+        }
 
         std::vector<std::uint8_t> styled(history.styled.size() * 4);
         std::vector<std::uint8_t> valid(history.valid.size() * 4);
@@ -1522,6 +1580,14 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
                             "NeuralPass could not resize the D3D11 mesh-UV capture surface.");
                     }
                 }
+                const auto replacement_epoch = state->replacement_epoch.load();
+                if (state->applied_replacement_epoch != replacement_epoch) {
+                    capture->clear_replacements();
+                    state->applied_replacement_epoch = replacement_epoch;
+                }
+                for (auto &[material_id, mips] : state->ready_replacements)
+                    capture->queue_replacement(material_id, std::move(mips));
+                state->ready_replacements.clear();
             }
         }
         if (capture != nullptr) {

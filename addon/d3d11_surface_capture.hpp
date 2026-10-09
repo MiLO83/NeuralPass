@@ -1,5 +1,8 @@
 #pragma once
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include "neuralpass/surface_capture.hpp"
 
 #include <d3d11.h>
@@ -7,6 +10,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace neuralpass::d3d11_capture {
 
@@ -16,6 +20,13 @@ struct UvSemantic {
     std::uint32_t register_index = 0;
 
     [[nodiscard]] bool valid() const noexcept { return !name.empty(); }
+};
+
+struct ReplacementMip {
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::vector<std::uint8_t> rgba;
+    std::vector<std::uint8_t> coverage;
 };
 
 // Reads the vertex shader output signature and selects the first two-component
@@ -58,6 +69,9 @@ public:
     [[nodiscard]] std::uint64_t dropped_frames() const noexcept;
     [[nodiscard]] std::uint32_t width() const noexcept;
     [[nodiscard]] std::uint32_t height() const noexcept;
+    void queue_replacement(std::uint64_t material_id,
+                           std::vector<ReplacementMip> mips);
+    void clear_replacements();
 
 private:
     struct Impl;

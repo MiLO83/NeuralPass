@@ -61,6 +61,14 @@ struct ReadbackSlot {
     std::uint64_t frame_index = 0;
 };
 
+struct ReplacementTexture {
+    ID3D11Resource *source = nullptr;
+    ID3D11Texture2D *texture = nullptr;
+    ID3D11ShaderResourceView *view = nullptr;
+    std::vector<ReplacementMip> mips;
+    bool dirty = true;
+};
+
 constexpr std::array<float, 4> k_clear {0.0f, 0.0f, 0.0f, 0.0f};
 const std::array<float, 4> k_missing_source {
     std::numeric_limits<float>::quiet_NaN(),
@@ -165,6 +173,7 @@ struct SurfaceCapture::Impl {
     std::array<ReadbackSlot, 3> readback;
     std::unordered_map<ShaderKey, ID3D11PixelShader *, ShaderKeyHash> shaders;
     std::unordered_map<ID3D11DepthStencilState *, DepthVariant> depth_variants;
+    std::unordered_map<std::uint64_t, ReplacementTexture> replacements;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     std::size_t next_readback = 0;
@@ -172,6 +181,134 @@ struct SurfaceCapture::Impl {
     std::uint64_t replayed_draws = 0;
     std::uint64_t dropped_frames = 0;
     bool target_cleared = false;
+
+    ID3D11ShaderResourceView *replacement(
+        ID3D11DeviceContext *context, std::uint64_t material_id,
+        SourceBinding source_binding, ID3D11ShaderResourceView *source_view) {
+        const auto found = replacements.find(material_id);
+        if (found == replacements.end() || !source_binding.valid() || source_view == nullptr ||
+            found->second.mips.empty()) return nullptr;
+        auto &entry = found->second;
+        ID3D11Resource *source_resource = nullptr;
+        ID3D11Texture2D *source_texture = nullptr;
+        source_view->GetResource(&source_resource);
+        if (source_resource != nullptr)
+            source_resource->QueryInterface(__uuidof(ID3D11Texture2D),
+                                             reinterpret_cast<void **>(&source_texture));
+        if (source_texture == nullptr) {
+            release(source_resource);
+            return nullptr;
+        }
+        D3D11_TEXTURE2D_DESC desc {};
+        source_texture->GetDesc(&desc);
+        D3D11_SHADER_RESOURCE_VIEW_DESC view_desc {};
+        source_view->GetDesc(&view_desc);
+        const bool byte_color = view_desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
+            view_desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB ||
+            view_desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM ||
+            view_desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+        if (!byte_color || desc.SampleDesc.Count != 1 || desc.ArraySize != 1 ||
+            view_desc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D) {
+            release(source_texture);
+            release(source_resource);
+            return nullptr;
+        }
+        if (entry.source != source_resource) {
+            release(entry.view);
+            release(entry.texture);
+            release(entry.source);
+            D3D11_TEXTURE2D_DESC replacement_desc = desc;
+            replacement_desc.Usage = D3D11_USAGE_DEFAULT;
+            replacement_desc.CPUAccessFlags = 0;
+            replacement_desc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
+            if (FAILED(device->CreateTexture2D(&replacement_desc, nullptr, &entry.texture)) ||
+                FAILED(device->CreateShaderResourceView(entry.texture, &view_desc, &entry.view))) {
+                release(entry.view);
+                release(entry.texture);
+                release(source_texture);
+                release(source_resource);
+                return nullptr;
+            }
+            entry.source = source_resource;
+            source_resource->AddRef();
+            entry.dirty = true;
+        }
+        if (entry.dirty) {
+            context->CopyResource(entry.texture, source_texture);
+            D3D11_TEXTURE2D_DESC patch_desc = desc;
+            patch_desc.Usage = D3D11_USAGE_DEFAULT;
+            patch_desc.BindFlags = 0;
+            patch_desc.CPUAccessFlags = 0;
+            patch_desc.MiscFlags = 0;
+            ID3D11Texture2D *patch_texture = nullptr;
+            if (FAILED(device->CreateTexture2D(&patch_desc, nullptr, &patch_texture))) {
+                release(source_texture);
+                release(source_resource);
+                return nullptr;
+            }
+            const bool bgra = view_desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM ||
+                view_desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+            const auto first_mip = view_desc.Texture2D.MostDetailedMip;
+            const auto view_levels = view_desc.Texture2D.MipLevels == UINT_MAX
+                ? desc.MipLevels - first_mip : view_desc.Texture2D.MipLevels;
+            const auto levels = std::min<std::size_t>(view_levels, entry.mips.size());
+            for (std::size_t level = 0; level < levels; ++level) {
+                const auto &mip = entry.mips[level];
+                if (mip.width == 0 || mip.height == 0 ||
+                    mip.rgba.size() != static_cast<std::size_t>(mip.width) * mip.height * 4 ||
+                    mip.coverage.size() != static_cast<std::size_t>(mip.width) * mip.height)
+                    continue;
+                const auto subresource = first_mip + static_cast<UINT>(level);
+                const auto source_width = std::max(1u, desc.Width >> subresource);
+                const auto source_height = std::max(1u, desc.Height >> subresource);
+                std::vector<std::uint8_t> patch(
+                    static_cast<std::size_t>(source_width) * source_height * 4);
+                for (std::uint32_t y = 0; y < source_height; ++y) {
+                    const auto ay = std::min(mip.height - 1, y * mip.height / source_height);
+                    for (std::uint32_t x = 0; x < source_width; ++x) {
+                        const auto ax = std::min(mip.width - 1, x * mip.width / source_width);
+                        const auto sample = static_cast<std::size_t>(ay) * mip.width + ax;
+                        const auto *rgba = mip.rgba.data() + sample * 4;
+                        auto *destination = patch.data() +
+                            (static_cast<std::size_t>(y) * source_width + x) * 4;
+                        destination[0] = rgba[bgra ? 2 : 0];
+                        destination[1] = rgba[1];
+                        destination[2] = rgba[bgra ? 0 : 2];
+                        destination[3] = rgba[3];
+                    }
+                }
+                context->UpdateSubresource(patch_texture, subresource, nullptr, patch.data(),
+                                           source_width * 4, 0);
+                for (std::uint32_t y = 0; y < source_height; ++y) {
+                    const auto ay = std::min(mip.height - 1, y * mip.height / source_height);
+                    std::uint32_t x = 0;
+                    while (x < source_width) {
+                        const auto ax = std::min(mip.width - 1, x * mip.width / source_width);
+                        if (mip.coverage[static_cast<std::size_t>(ay) * mip.width + ax] == 0) {
+                            ++x;
+                            continue;
+                        }
+                        const auto begin = x++;
+                        while (x < source_width) {
+                            const auto sample_x = std::min(
+                                mip.width - 1, x * mip.width / source_width);
+                            if (mip.coverage[static_cast<std::size_t>(ay) * mip.width + sample_x] == 0)
+                                break;
+                            ++x;
+                        }
+                        const D3D11_BOX box {begin, y, 0, x, y + 1, 1};
+                        context->CopySubresourceRegion(entry.texture, subresource,
+                            begin, y, 0, patch_texture, subresource, &box);
+                    }
+                }
+            }
+            release(patch_texture);
+            entry.dirty = false;
+        }
+        release(source_texture);
+        release(source_resource);
+        return entry.view;
+    }
 
     ID3D11PixelShader *shader(const UvSemantic &uv, std::uint64_t material_id,
                              SourceBinding source_binding) {
@@ -322,9 +459,22 @@ struct SurfaceCapture::Impl {
         for (std::uint32_t index = rtv_count; index < uavs.size(); ++index)
             if (uavs[index] != nullptr) uav_count = index + 1;
 
+        const auto source_binding = select_source_binding(context, source_texture_override);
+        ID3D11ShaderResourceView *original_source = nullptr;
+        if (source_binding.texture_slot >= 0)
+            context->PSGetShaderResources(static_cast<UINT>(source_binding.texture_slot), 1,
+                                          &original_source);
+        auto *replacement_view = replacement(
+            context, material_id, source_binding, original_source);
+        if (replacement_view != nullptr)
+            context->PSSetShaderResources(static_cast<UINT>(source_binding.texture_slot), 1,
+                                          &replacement_view);
         // Execute the application's draw first. The callback returns true after
         // a successful replay so ReShade does not execute it a second time.
         draw();
+        if (replacement_view != nullptr)
+            context->PSSetShaderResources(static_cast<UINT>(source_binding.texture_slot), 1,
+                                          &original_source);
 
         ID3D11PixelShader *original_pixel_shader = nullptr;
         context->PSGetShader(&original_pixel_shader, nullptr, nullptr);
@@ -336,7 +486,6 @@ struct SurfaceCapture::Impl {
         UINT stencil_reference = 0;
         context->OMGetDepthStencilState(&original_depth, &stencil_reference);
 
-        const auto source_binding = select_source_binding(context, source_texture_override);
         auto *capture_shader = shader(uv, material_id, source_binding);
         auto *capture_depth_state = capture_depth(original_depth);
         if (capture_shader != nullptr && (original_depth == nullptr || capture_depth_state != nullptr)) {
@@ -366,6 +515,7 @@ struct SurfaceCapture::Impl {
         release(original_pixel_shader);
         release(original_blend);
         release(original_depth);
+        release(original_source);
         for (auto *&rtv : rtvs) release(rtv);
         for (auto *&uav : uavs) release(uav);
         release(dsv);
@@ -381,6 +531,12 @@ struct SurfaceCapture::Impl {
             (void)source;
             release(variant.source);
             release(variant.capture);
+        }
+        for (auto &[material_id, replacement] : replacements) {
+            (void)material_id;
+            release(replacement.view);
+            release(replacement.texture);
+            release(replacement.source);
         }
         for (auto &slot : readback) {
             release(slot.texture);
@@ -531,6 +687,25 @@ std::uint32_t SurfaceCapture::width() const noexcept {
 
 std::uint32_t SurfaceCapture::height() const noexcept {
     return impl_ != nullptr ? impl_->height : 0;
+}
+
+void SurfaceCapture::queue_replacement(
+    std::uint64_t material_id, std::vector<ReplacementMip> mips) {
+    if (impl_ == nullptr || material_id == 0 || mips.empty()) return;
+    auto &entry = impl_->replacements[material_id];
+    entry.mips = std::move(mips);
+    entry.dirty = true;
+}
+
+void SurfaceCapture::clear_replacements() {
+    if (impl_ == nullptr) return;
+    for (auto &[material_id, replacement] : impl_->replacements) {
+        (void)material_id;
+        release(replacement.view);
+        release(replacement.texture);
+        release(replacement.source);
+    }
+    impl_->replacements.clear();
 }
 
 bool SurfaceCapture::draw(ID3D11DeviceContext *context, const UvSemantic &uv,

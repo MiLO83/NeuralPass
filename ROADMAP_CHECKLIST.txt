@@ -67,7 +67,8 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [~] Preserve source alpha and original pixels outside style coverage.
     Evidence: source-aware transfer preserves texture alpha and framebuffer reconstruction
     retains fallback outside coverage; D3D11 rejects fully transparent selected-source
-    texels before capture. GPU replacement assembly and custom alpha tests remain.
+    texels and its WARP-tested replacement clone patches only covered texels.
+    Custom alpha tests and other API replacement assemblers remain.
 [x] Track unseen-original, direct-observation, and newly-visible-inpaint coverage.
     Evidence: explicit atlas coverage states, provenance commit test, and cache format test.
 [x] Let later direct observations supersede inpainted texels.
@@ -77,13 +78,16 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     partial-footprint leakage test.
 [~] Create separate replacement textures per pipeline-plus-descriptor binding.
     Evidence: canonical cross-API BindingInstanceKey now distinguishes pipeline and
-    descriptor-slot placement; GPU replacement allocation/binding remains.
+    descriptor-slot placement; D3D11 allocates, coverage-patches, temporarily binds,
+    and restores per-binding RGBA8/BGRA8 replacements under WARP. Other APIs remain.
 
 3. GRAPHICS API ADAPTERS
 ------------------------
 [ ] Production D3D9 x86/x64 capture and replacement.
 [ ] Production D3D10 x86/x64 capture and replacement.
 [~] Production D3D11 x86/x64 capture and replacement.
+    Evidence: x64 D3D11 capture plus coverage-safe RGBA8/BGRA8 substitution passes WARP;
+    x86, broad formats, indirect draws, and real-game validation remain.
 [ ] Production D3D12 x64 capture and replacement.
 [ ] Production Vulkan x86/x64 capture and replacement.
 [ ] Support indexed, non-indexed, instanced, and indirect draws.
@@ -144,7 +148,8 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     Evidence: camera-cut preservation and confirmed-new-scene generation tests.
 [x] Returning views reuse established coverage without regeneration.
     Evidence: zero-reveal covered-plan test plus persistent returning-view catalog test.
-[ ] Permanently invisible texels remain identical to the source.
+[x] Permanently invisible texels remain identical to the source.
+    Evidence: conservative mip coverage tests plus D3D11 WARP sparse replacement test.
 [x] Direct observations replace earlier inpainted texels.
     Evidence: provenance supersession test verifies color, coverage, alpha, and no reschedule.
 [ ] Shared sources with distinct bindings receive separate replacements.

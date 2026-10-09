@@ -168,6 +168,15 @@ Windows WARP test covers indexed and non-indexed replay, derivative capture,
 and state restoration. Capture frames and framebuffer frames are paired by GPU
 sequence number before reveal-only atlas generation.
 
+For D3D11 RGBA8/BGRA8 Texture2D sources, completed atlas snapshots are assembled
+into real per-binding replacement textures. Each replacement begins as a GPU
+copy of the selected source; only covered atlas runs are patched, using the
+coverage-safe mip chain. The replacement SRV is bound only for the application
+draw and the original SRV is restored before the capture replay, so unseen
+texels and transfer inputs remain original. Scene changes discard the live
+replacement set before the new namespace can draw. WARP verifies substitution,
+uncovered-source preservation, and SRV restoration.
+
 The live worker classifies each captured D3D11 pixel as known-visible,
 disoccluded, newly front-facing, off-screen entry, first observation, or
 unsupported and reports the current counts in the overlay. A camera cut passes
@@ -185,7 +194,7 @@ validated surface-frame contract.
 
 | Graphics API | Geometry capture status |
 | --- | --- |
-| D3D11 | Experimental draw replay; automated WARP coverage |
+| D3D11 | Experimental draw replay and RGBA8/BGRA8 replacement; automated WARP coverage |
 | D3D9 / D3D10 | Adapter required |
 | D3D12 | Adapter required |
 | Vulkan | Adapter required |
@@ -214,6 +223,8 @@ backend without starting the game.
   a normal/emissive texture, use the per-binding source-SRV override in the overlay;
   overrides persist in the game's ReShade configuration when the binding identity
   is restart-stable, while handle-derived bindings remain safely session-local.
+- D3D11 GPU replacement currently supports non-array RGBA8/BGRA8 Texture2D SRVs.
+  Compressed, HDR/float, array, and multisampled sources retain screen-space output.
 - v0.1 supports SDR RGBA8 capture. HDR/scRGB is not processed correctly yet.
 - The screen-space fallback cannot follow large camera motion as accurately as
   engine motion vectors; changed pixels are invalidated and restyled instead.

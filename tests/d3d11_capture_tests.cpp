@@ -53,7 +53,10 @@ void test_triangle_replay_produces_material_uv() {
         "Output main(Input input) { Output o; o.position=float4(input.position,0.5,1);"
         "o.uv=input.uv; return o; }";
     constexpr char pixel_source[] =
-        "float4 main(float2 uv : TEXCOORD0) : SV_Target { return float4(uv,0,1); }";
+        "Texture2D<float4> color_texture : register(t5);"
+        "SamplerState color_sampler : register(s5);"
+        "float4 main(float2 uv : TEXCOORD0) : SV_Target {"
+        "return color_texture.Sample(color_sampler,uv); }";
     ID3DBlob *vertex_bytecode = compile(vertex_source, "vs_5_0");
     ID3DBlob *pixel_bytecode = compile(pixel_source, "ps_5_0");
     ID3D11VertexShader *vertex_shader = nullptr;
@@ -134,7 +137,7 @@ void test_triangle_replay_produces_material_uv() {
     require(SUCCEEDED(device->CreateBlendState(&blend_desc, &blend_state)),
         "could not create the test blend state");
     constexpr FLOAT blend_factor[4] {0.25f, 0.5f, 0.75f, 1.0f};
-    constexpr UINT sample_mask = 0x5a5a5a5au;
+    constexpr UINT sample_mask = 0x5a5a5a5bu;
     context->OMSetBlendState(blend_state, blend_factor, sample_mask);
     D3D11_DEPTH_STENCIL_DESC depth_desc {};
     depth_desc.DepthEnable = FALSE;
@@ -200,6 +203,20 @@ void test_triangle_replay_produces_material_uv() {
     require(capture.initialize(device, 8, 8), "could not initialize surface capture");
     constexpr std::uint64_t first_material_id = 0x12345678abcdef01ull;
     constexpr std::uint64_t material_id = 0xfedcba9876543210ull;
+    neuralpass::d3d11_capture::ReplacementMip replacement;
+    replacement.width = replacement.height = 4;
+    replacement.rgba.resize(4 * 4 * 4);
+    replacement.coverage.resize(4 * 4, 2);
+    for (std::size_t index = 0; index < replacement.rgba.size(); index += 4) {
+        replacement.rgba[index + 0] = 200;
+        replacement.rgba[index + 1] = 10;
+        replacement.rgba[index + 2] = 20;
+        replacement.rgba[index + 3] = 191;
+    }
+    for (std::size_t y = 0; y < 4; ++y) {
+        replacement.coverage[y * 4 + 0] = 0;
+    }
+    capture.queue_replacement(material_id, {std::move(replacement)});
     require(capture.draw(context, uv_semantic, first_material_id, 3, 1, 0, 0),
         "capture adapter did not handle the triangle draw");
     require(capture.draw_indexed(context, uv_semantic, material_id, 3, 1, 0, 0, 0, 5),
@@ -229,6 +246,34 @@ void test_triangle_replay_produces_material_uv() {
     context->OMGetRenderTargets(1, &restored_target, nullptr);
     require(restored_target == target_view, "render target state was not restored");
     release(restored_target);
+    ID3D11ShaderResourceView *restored_source = nullptr;
+    context->PSGetShaderResources(5, 1, &restored_source);
+    require(restored_source == override_view, "source texture binding was not restored");
+    release(restored_source);
+    D3D11_TEXTURE2D_DESC target_staging_desc = target_desc;
+    target_staging_desc.Usage = D3D11_USAGE_STAGING;
+    target_staging_desc.BindFlags = 0;
+    target_staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    ID3D11Texture2D *target_staging = nullptr;
+    require(SUCCEEDED(device->CreateTexture2D(&target_staging_desc, nullptr, &target_staging)),
+        "could not create replacement verification staging texture");
+    context->CopyResource(target_staging, target);
+    D3D11_MAPPED_SUBRESOURCE target_mapped {};
+    require(SUCCEEDED(context->Map(target_staging, 0, D3D11_MAP_READ, 0, &target_mapped)),
+        "could not read replacement verification target");
+    const auto *target_covered = static_cast<const std::uint8_t *>(target_mapped.pData) +
+        7 * target_mapped.RowPitch + 7 * 4;
+    require(std::abs(static_cast<int>(target_covered[0]) - 200) <= 1 &&
+            std::abs(static_cast<int>(target_covered[1]) - 10) <= 1 &&
+            std::abs(static_cast<int>(target_covered[2]) - 20) <= 1,
+        "covered atlas texel was not substituted into the game draw");
+    const auto *target_uncovered = static_cast<const std::uint8_t *>(target_mapped.pData) +
+        7 * target_mapped.RowPitch;
+    require(std::abs(static_cast<int>(target_uncovered[0]) - 16) <= 1 &&
+            std::abs(static_cast<int>(target_uncovered[1]) - 32) <= 1 &&
+            std::abs(static_cast<int>(target_uncovered[2]) - 240) <= 1,
+        "uncovered replacement texel did not retain the original source");
+    context->Unmap(target_staging, 0);
     require(!capture.finish_frame(context).has_value(),
         "readback completed before it was queued");
     context->Flush();
@@ -266,6 +311,7 @@ void test_triangle_replay_produces_material_uv() {
         "fully transparent source texel was incorrectly captured as visible geometry");
 
     capture.reset();
+    release(target_staging);
     release(override_view);
     release(override_texture);
     release(source_sampler);

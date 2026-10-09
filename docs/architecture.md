@@ -70,6 +70,15 @@ fragments that pass the original depth surface with an equal-depth replay; this
 provides matched device-depth evidence, while view-space linearization still
 requires projection metadata from the adapter.
 
+The D3D11 replacement assembler consumes the baker's conservative mip chain.
+For a supported RGBA8/BGRA8 source it clones the complete GPU texture, then
+updates contiguous covered runs only; unseen texels and incomplete coarse mip
+footprints remain byte-for-byte source data. The adapter temporarily substitutes
+that SRV for the application draw, restores the original binding, and performs
+capture against the original source. Replacement objects are keyed by the same
+pipeline-plus-descriptor identity as their atlas and are cleared on a confirmed
+scene namespace change.
+
 The local/world RGB8 planes produced by the StreamDiffusion bridge are optical-
 flow coordinates into a prior screen image. They stabilize live generation but
 are deliberately not treated as mesh UVs. A graphics adapter must provide a
