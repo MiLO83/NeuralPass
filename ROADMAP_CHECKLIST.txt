@@ -28,7 +28,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [x] Preserve atlases across same-scene camera cuts and bake newly visible UVs.
     Evidence: dedicated camera-cut atlas/reveal test and Windows add-on build.
 [ ] Combine binding, material, geometry, UV, depth, and color evidence for scene identity.
-[ ] Capture UV gradients, linear depth, motion, and confidence for every supported adapter.
+[~] Capture UV gradients, linear depth, motion, and confidence for every supported adapter.
+    Evidence: D3D11 second-MRT UV-gradient/confidence capture passes WARP;
+    linear depth, motion, and the other API adapters remain.
 [ ] Build hierarchical current/previous depth pyramids.
 [ ] Raymarch visibility using engine motion, camera inference, then optical flow.
 [ ] Classify known, disoccluded, newly front-facing, off-screen-entry, and unsupported samples.
@@ -44,7 +46,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [x] Never generate atlas texels that have no visible screen correspondence.
     Evidence: commit accepts only reveal-mask correspondences.
 [ ] Convert styled framebuffer appearance into a linear source-texture transfer.
-[ ] Implement confidence-weighted elliptical UV splatting.
+[x] Implement confidence-weighted elliptical UV splatting.
+    Evidence: bounded anisotropic-footprint and confidence-accumulation core test;
+    D3D11 WARP verifies captured screen-space UV derivatives.
 [ ] Isolate UV islands, overlapping layers, bindings, and materials.
 [ ] Preserve source alpha and original pixels outside style coverage.
 [x] Track unseen-original, direct-observation, and newly-visible-inpaint coverage.

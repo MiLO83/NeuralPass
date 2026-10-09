@@ -33,7 +33,8 @@ std::vector<SurfaceCorrespondence> SurfaceCaptureFrame::correspondences(
             const bool has_hit_depth = std::isfinite(pixel.hit_depth);
             if (has_framebuffer_depth != has_hit_depth) continue;
             result.push_back({x, y, pixel.material_id, pixel.u, pixel.v, pixel.confidence,
-                              pixel.framebuffer_depth, pixel.hit_depth});
+                              pixel.framebuffer_depth, pixel.hit_depth,
+                              pixel.du_dx, pixel.du_dy, pixel.dv_dx, pixel.dv_dy});
         }
     }
     result.shrink_to_fit();

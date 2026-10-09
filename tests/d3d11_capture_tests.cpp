@@ -196,6 +196,11 @@ void test_triangle_replay_produces_material_uv() {
     require(std::isfinite(center.u) && std::isfinite(center.v) &&
             center.u > 0.4f && center.u < 0.7f && center.v > 0.3f && center.v < 0.8f,
         "captured interpolated UV is invalid");
+    require(std::isfinite(center.du_dx) && std::isfinite(center.du_dy) &&
+            std::isfinite(center.dv_dx) && std::isfinite(center.dv_dy) &&
+            std::abs(center.du_dx) + std::abs(center.du_dy) +
+                std::abs(center.dv_dx) + std::abs(center.dv_dy) > 0.01f,
+        "captured UV gradients are invalid");
 
     capture.reset();
     release(depth_state);

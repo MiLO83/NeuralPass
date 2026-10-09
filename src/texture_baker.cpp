@@ -74,31 +74,22 @@ bool MaterialTextureAtlas::observe(const Color &observed,
     const float v = coordinate(sample.v, settings.wrap_v);
     const float fx = u * static_cast<float>(width() - 1);
     const float fy = v * static_cast<float>(height() - 1);
-    const int x0 = static_cast<int>(std::floor(fx));
-    const int y0 = static_cast<int>(std::floor(fy));
-    const float tx = fx - x0;
-    const float ty = fy - y0;
-    const std::array<float, 4> bilinear {
-        (1.0f-tx)*(1.0f-ty), tx*(1.0f-ty), (1.0f-tx)*ty, tx*ty
-    };
-    const std::array<int, 4> xs {x0, x0+1, x0, x0+1};
-    const std::array<int, 4> ys {y0, y0, y0+1, y0+1};
     bool accepted = false;
-    for (std::size_t corner = 0; corner < 4; ++corner) {
-        const auto x = texel(xs[corner], width(), settings.wrap_u);
-        const auto y = texel(ys[corner], height(), settings.wrap_v);
-        const float vote = bilinear[corner] * sample.confidence * settings.observation_weight;
-        if (!std::isfinite(vote) || vote <= std::numeric_limits<float>::epsilon()) continue;
+    auto apply_vote = [&](int sample_x, int sample_y, float footprint_weight) {
+        const auto x = texel(sample_x, width(), settings.wrap_u);
+        const auto y = texel(sample_y, height(), settings.wrap_v);
+        const float vote = footprint_weight * sample.confidence * settings.observation_weight;
+        if (!std::isfinite(vote) || vote <= std::numeric_limits<float>::epsilon()) return;
         const auto existing = coverage_.at(x, y);
-        if (kind == TextureSampleKind::generated_inpaint && existing != kUnseen) continue;
-        if (settings.fill_only_unobserved && existing == kObserved) continue;
+        if (kind == TextureSampleKind::generated_inpaint && existing != kUnseen) return;
+        if (settings.fill_only_unobserved && existing == kObserved) return;
         if (settings.fill_only_unobserved) {
             color_.at(x, y) = observed;
             history_weight_.at(x, y) = vote;
             coverage_.at(x, y) = kind == TextureSampleKind::direct_observation
                 ? kObserved : kInpainted;
             accepted = true;
-            continue;
+            return;
         }
         const float old_weight = history_weight_.at(x, y);
         const float retained = std::min(old_weight, std::max(0.0f, settings.maximum_history_weight));
@@ -108,6 +99,58 @@ bool MaterialTextureAtlas::observe(const Color &observed,
         coverage_.at(x, y) = kind == TextureSampleKind::direct_observation
             ? kObserved : kInpainted;
         accepted = true;
+    };
+
+    const bool has_gradients = std::isfinite(sample.du_dx) && std::isfinite(sample.du_dy) &&
+        std::isfinite(sample.dv_dx) && std::isfinite(sample.dv_dy) &&
+        settings.maximum_splat_radius != 0;
+    if (has_gradients) {
+        const float j00 = sample.du_dx * static_cast<float>(width() - 1);
+        const float j01 = sample.du_dy * static_cast<float>(width() - 1);
+        const float j10 = sample.dv_dx * static_cast<float>(height() - 1);
+        const float j11 = sample.dv_dy * static_cast<float>(height() - 1);
+        // J*J^T is the UV-space covariance of a screen pixel. A half-texel
+        // floor keeps magnified samples stable and invertible.
+        const float covariance_xx = j00*j00 + j01*j01 + 0.25f;
+        const float covariance_xy = j00*j10 + j01*j11;
+        const float covariance_yy = j10*j10 + j11*j11 + 0.25f;
+        const float determinant = covariance_xx*covariance_yy - covariance_xy*covariance_xy;
+        if (std::isfinite(determinant) && determinant > 1.0e-8f) {
+            const float inverse_xx = covariance_yy / determinant;
+            const float inverse_xy = -covariance_xy / determinant;
+            const float inverse_yy = covariance_xx / determinant;
+            const auto limit = static_cast<int>(settings.maximum_splat_radius);
+            const int radius_x = std::min(limit, std::max(1,
+                static_cast<int>(std::ceil(2.0f * std::sqrt(covariance_xx)))));
+            const int radius_y = std::min(limit, std::max(1,
+                static_cast<int>(std::ceil(2.0f * std::sqrt(covariance_yy)))));
+            const int center_x = static_cast<int>(std::floor(fx));
+            const int center_y = static_cast<int>(std::floor(fy));
+            for (int y = center_y - radius_y; y <= center_y + radius_y; ++y) {
+                for (int x = center_x - radius_x; x <= center_x + radius_x; ++x) {
+                    const float dx = (static_cast<float>(x) + 0.5f) - fx;
+                    const float dy = (static_cast<float>(y) + 0.5f) - fy;
+                    const float distance = inverse_xx*dx*dx +
+                        2.0f*inverse_xy*dx*dy + inverse_yy*dy*dy;
+                    if (std::isfinite(distance) && distance <= 4.0f)
+                        apply_vote(x, y, std::exp(-0.5f * distance));
+                }
+            }
+            return accepted;
+        }
+    }
+
+    const int x0 = static_cast<int>(std::floor(fx));
+    const int y0 = static_cast<int>(std::floor(fy));
+    const float tx = fx - x0;
+    const float ty = fy - y0;
+    const std::array<float, 4> bilinear {
+        (1.0f-tx)*(1.0f-ty), tx*(1.0f-ty), (1.0f-tx)*ty, tx*ty
+    };
+    const std::array<int, 4> xs {x0, x0+1, x0, x0+1};
+    const std::array<int, 4> ys {y0, y0, y0+1, y0+1};
+    for (std::size_t corner = 0; corner < 4; ++corner) {
+        apply_vote(xs[corner], ys[corner], bilinear[corner]);
     }
     return accepted;
 }

@@ -46,6 +46,7 @@ struct DepthVariant {
 
 struct ReadbackSlot {
     ID3D11Texture2D *texture = nullptr;
+    ID3D11Texture2D *gradients = nullptr;
     ID3D11Query *query = nullptr;
     bool in_flight = false;
     std::uint64_t frame_index = 0;
@@ -59,6 +60,8 @@ struct SurfaceCapture::Impl {
     ID3D11Device *device = nullptr;
     ID3D11Texture2D *target = nullptr;
     ID3D11RenderTargetView *target_view = nullptr;
+    ID3D11Texture2D *gradient_target = nullptr;
+    ID3D11RenderTargetView *gradient_target_view = nullptr;
     std::array<ReadbackSlot, 3> readback;
     std::unordered_map<ShaderKey, ID3D11PixelShader *, ShaderKeyHash> shaders;
     std::unordered_map<ID3D11DepthStencilState *, DepthVariant> depth_variants;
@@ -68,6 +71,7 @@ struct SurfaceCapture::Impl {
     std::uint64_t next_frame_index = 1;
     std::uint64_t replayed_draws = 0;
     std::uint64_t dropped_frames = 0;
+    bool target_cleared = false;
 
     ID3D11PixelShader *shader(const UvSemantic &uv, std::uint64_t material_id) {
         const ShaderKey key {uv.name, uv.index, uv.register_index, material_id};
@@ -83,10 +87,13 @@ struct SurfaceCapture::Impl {
         // reading clip-space XY as UV.
         source << "struct Input { float4 position : SV_Position; float2 uv : "
                << uv.name << uv.index << "; };\n"
-               << "uint4 main(Input input) : SV_Target { return uint4("
+               << "struct Output { uint4 surface : SV_Target0; float4 gradients : SV_Target1; };\n"
+               << "Output main(Input input) { Output output; output.surface = uint4("
                << static_cast<std::uint32_t>(material_id) << "u,"
                << static_cast<std::uint32_t>(material_id >> 32) << "u,"
-               << "asuint(input.uv.x),asuint(input.uv.y)); }\n";
+               << "asuint(input.uv.x),asuint(input.uv.y)); "
+               << "float2 dx = ddx(input.uv); float2 dy = ddy(input.uv); "
+               << "output.gradients = float4(dx.x,dy.x,dx.y,dy.y); return output; }\n";
         ID3DBlob *bytecode = nullptr;
         ID3DBlob *errors = nullptr;
         const auto text = source.str();
@@ -190,6 +197,11 @@ struct SurfaceCapture::Impl {
             release(dsv);
             return false;
         }
+        if (!target_cleared) {
+            context->ClearRenderTargetView(target_view, k_clear.data());
+            context->ClearRenderTargetView(gradient_target_view, k_clear.data());
+            target_cleared = true;
+        }
         std::uint32_t uav_count = 0;
         for (std::uint32_t index = rtv_count; index < uavs.size(); ++index)
             if (uavs[index] != nullptr) uav_count = index + 1;
@@ -211,7 +223,8 @@ struct SurfaceCapture::Impl {
         auto *capture_shader = shader(uv, material_id);
         auto *capture_depth_state = capture_depth(original_depth);
         if (capture_shader != nullptr && (original_depth == nullptr || capture_depth_state != nullptr)) {
-            context->OMSetRenderTargets(1, &target_view, dsv);
+            ID3D11RenderTargetView *capture_targets[2] {target_view, gradient_target_view};
+            context->OMSetRenderTargets(2, capture_targets, dsv);
             context->OMSetBlendState(nullptr, nullptr, UINT_MAX);
             context->OMSetDepthStencilState(capture_depth_state, stencil_reference);
             context->PSSetShader(capture_shader, nullptr, 0);
@@ -253,10 +266,13 @@ struct SurfaceCapture::Impl {
         }
         for (auto &slot : readback) {
             release(slot.texture);
+            release(slot.gradients);
             release(slot.query);
         }
         release(target_view);
         release(target);
+        release(gradient_target_view);
+        release(gradient_target);
         release(device);
     }
 };
@@ -314,13 +330,27 @@ bool SurfaceCapture::initialize(ID3D11Device *device, std::uint32_t width,
         delete implementation;
         return false;
     }
+    D3D11_TEXTURE2D_DESC gradient_desc = target_desc;
+    gradient_desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    if (FAILED(device->CreateTexture2D(&gradient_desc, nullptr,
+                                      &implementation->gradient_target)) ||
+        FAILED(device->CreateRenderTargetView(implementation->gradient_target, nullptr,
+                                              &implementation->gradient_target_view))) {
+        delete implementation;
+        return false;
+    }
     D3D11_TEXTURE2D_DESC staging_desc = target_desc;
     staging_desc.Usage = D3D11_USAGE_STAGING;
     staging_desc.BindFlags = 0;
     staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
     D3D11_QUERY_DESC query_desc {D3D11_QUERY_EVENT, 0};
+    D3D11_TEXTURE2D_DESC gradient_staging = gradient_desc;
+    gradient_staging.Usage = D3D11_USAGE_STAGING;
+    gradient_staging.BindFlags = 0;
+    gradient_staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
     for (auto &slot : implementation->readback) {
         if (FAILED(device->CreateTexture2D(&staging_desc, nullptr, &slot.texture)) ||
+            FAILED(device->CreateTexture2D(&gradient_staging, nullptr, &slot.gradients)) ||
             FAILED(device->CreateQuery(&query_desc, &slot.query))) {
             delete implementation;
             return false;
@@ -381,30 +411,50 @@ std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
         if (!slot.in_flight || context->GetData(slot.query, nullptr, 0,
                 D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) continue;
         D3D11_MAPPED_SUBRESOURCE mapped {};
-        if (SUCCEEDED(context->Map(slot.texture, 0, D3D11_MAP_READ, 0, &mapped))) {
+        D3D11_MAPPED_SUBRESOURCE gradient_mapped {};
+        if (SUCCEEDED(context->Map(slot.texture, 0, D3D11_MAP_READ, 0, &mapped)) &&
+            SUCCEEDED(context->Map(slot.gradients, 0, D3D11_MAP_READ, 0, &gradient_mapped))) {
             SurfaceCaptureFrame frame(impl_->width, impl_->height, slot.frame_index);
             for (std::uint32_t y = 0; y < impl_->height; ++y) {
                 const auto *row = static_cast<const std::uint8_t *>(mapped.pData) +
                     static_cast<std::size_t>(y) * mapped.RowPitch;
+                const auto *gradient_row = static_cast<const std::uint8_t *>(gradient_mapped.pData) +
+                    static_cast<std::size_t>(y) * gradient_mapped.RowPitch;
                 for (std::uint32_t x = 0; x < impl_->width; ++x) {
                     const auto *encoded = reinterpret_cast<const std::uint32_t *>(row) + x * 4;
+                    const auto *gradient = reinterpret_cast<const float *>(gradient_row) + x * 4;
                     auto &pixel = frame.pixels().at(x, y);
                     pixel.material_id = static_cast<std::uint64_t>(encoded[0]) |
                         (static_cast<std::uint64_t>(encoded[1]) << 32);
                     std::memcpy(&pixel.u, encoded + 2, sizeof(float));
                     std::memcpy(&pixel.v, encoded + 3, sizeof(float));
                     pixel.confidence = pixel.material_id == 0 ? 0.0f : 1.0f;
+                    pixel.du_dx = gradient[0];
+                    pixel.du_dy = gradient[1];
+                    pixel.dv_dx = gradient[2];
+                    pixel.dv_dy = gradient[3];
                 }
             }
+            context->Unmap(slot.gradients, 0);
             context->Unmap(slot.texture, 0);
             result = std::move(frame);
+        } else {
+            // Mapping the identity surface may have succeeded before the
+            // gradient surface failed; unmap only that first resource.
+            if (mapped.pData != nullptr) context->Unmap(slot.texture, 0);
         }
         slot.in_flight = false;
     }
 
     auto &next = impl_->readback[impl_->next_readback];
     if (!next.in_flight) {
+        if (!impl_->target_cleared) {
+            context->ClearRenderTargetView(impl_->target_view, k_clear.data());
+            context->ClearRenderTargetView(impl_->gradient_target_view, k_clear.data());
+            impl_->target_cleared = true;
+        }
         context->CopyResource(next.texture, impl_->target);
+        context->CopyResource(next.gradients, impl_->gradient_target);
         context->End(next.query);
         next.in_flight = true;
         next.frame_index = impl_->next_frame_index++;
@@ -413,6 +463,7 @@ std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
         ++impl_->dropped_frames;
     }
     context->ClearRenderTargetView(impl_->target_view, k_clear.data());
+    context->ClearRenderTargetView(impl_->gradient_target_view, k_clear.data());
     return result;
 }
 

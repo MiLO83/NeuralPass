@@ -24,6 +24,12 @@ struct SurfaceCorrespondence {
     // NaN keeps depth validation optional for adapters that have not exposed it yet.
     float framebuffer_depth = std::numeric_limits<float>::quiet_NaN();
     float hit_depth = std::numeric_limits<float>::quiet_NaN();
+    // Screen-space UV derivatives. When all four are finite the baker uses an
+    // elliptical pixel footprint; otherwise it falls back to bilinear splatting.
+    float du_dx = std::numeric_limits<float>::quiet_NaN();
+    float du_dy = std::numeric_limits<float>::quiet_NaN();
+    float dv_dx = std::numeric_limits<float>::quiet_NaN();
+    float dv_dy = std::numeric_limits<float>::quiet_NaN();
 };
 
 struct TextureBakeSettings {
@@ -36,6 +42,7 @@ struct TextureBakeSettings {
     bool fill_only_unobserved = true;
     float depth_absolute_threshold = 0.002f;
     float depth_relative_threshold = 0.02f;
+    std::uint32_t maximum_splat_radius = 16;
 };
 
 enum class TextureSampleKind : std::uint8_t {

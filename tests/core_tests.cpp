@@ -177,6 +177,31 @@ static void test_texture_baker_locks_observed_texels_and_rejects_bad_depth() {
             "depth-mismatched sample painted an atlas texel");
 }
 
+static void test_elliptical_uv_splat_uses_gradients_and_confidence() {
+    MaterialTextureAtlas atlas(10, 64, 64);
+    SurfaceCorrespondence sample {0, 0, 10, 0.5f, 0.5f, 0.25f};
+    sample.du_dx = 0.08f;
+    sample.du_dy = 0.0f;
+    sample.dv_dx = 0.0f;
+    sample.dv_dy = 0.015f;
+    TextureBakeSettings settings;
+    settings.fill_only_unobserved = false;
+    require(atlas.observe({1.0f, 0.0f, 0.0f, 1.0f}, sample, settings),
+            "gradient-driven elliptical splat rejected a valid sample");
+    const auto footprint = static_cast<std::size_t>(std::count_if(
+        atlas.coverage().pixels().begin(), atlas.coverage().pixels().end(),
+        [](std::uint8_t value) { return value != MaterialTextureAtlas::kUnseen; }));
+    require(footprint > 4 && footprint < 256,
+            "elliptical splat did not create a bounded anisotropic footprint");
+
+    sample.confidence = 1.0f;
+    require(atlas.observe({0.0f, 0.0f, 1.0f, 1.0f}, sample, settings),
+            "second confidence-weighted elliptical sample was rejected");
+    const auto center = atlas.sample(0.5f, 0.5f);
+    require(center.b > center.r,
+            "higher-confidence UV observation did not dominate accumulated color");
+}
+
 static void test_material_baker_handles_sparse_multiple_materials() {
     Image<Color> restyled(4, 1);
     restyled.at(0, 0) = {1.0f, 0.0f, 0.0f, 1.0f};
@@ -491,6 +516,7 @@ int main() {
         test_binding_identity_is_pipeline_and_slot_specific();
         test_texture_baker_splats_inpaints_and_reconstructs();
         test_texture_baker_locks_observed_texels_and_rejects_bad_depth();
+        test_elliptical_uv_splat_uses_gradients_and_confidence();
         test_material_baker_handles_sparse_multiple_materials();
         test_uncovered_atlas_never_reconstructs_debug_sentinel();
         test_partial_atlas_sampling_ignores_unseen_neighbors();
