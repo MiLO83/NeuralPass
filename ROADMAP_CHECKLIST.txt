@@ -98,7 +98,10 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     Evidence: the D3D11 adapter handles direct and indirect indexed/non-indexed
     instanced draws, with application draw, capture replay, and replacement verified
     under WARP; equivalent support remains for every other API adapter.
-[ ] Restore every touched pipeline, descriptor, target, depth, UAV, and dynamic state.
+[~] Restore every touched pipeline, descriptor, target, depth, UAV, and dynamic state.
+    Evidence: D3D11 replay restores pixel shader and dynamic-linkage instances,
+    selected source SRV, MRTs, depth view/state, blend factors/sample mask, stencil
+    reference, and output-merger UAV bindings under WARP; other adapters remain.
 [~] Implement aggressive base-color binding selection and manual correction.
     Evidence: D3D11 ranks bound sampleable 2D color SRVs and captures the selected
     source texel with its sampler; the overlay provides a per-binding SRV-slot

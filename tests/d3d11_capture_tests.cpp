@@ -166,6 +166,39 @@ void test_triangle_replay_produces_material_uv() {
             SUCCEEDED(device->CreateRenderTargetView(target, nullptr, &target_view)),
         "could not create the test render target");
 
+    ID3D11Texture2D *secondary_target = nullptr;
+    ID3D11RenderTargetView *secondary_target_view = nullptr;
+    require(SUCCEEDED(device->CreateTexture2D(&target_desc, nullptr, &secondary_target)) &&
+            SUCCEEDED(device->CreateRenderTargetView(
+                secondary_target, nullptr, &secondary_target_view)),
+        "could not create the secondary render target");
+    D3D11_TEXTURE2D_DESC depth_texture_desc = target_desc;
+    depth_texture_desc.Format = DXGI_FORMAT_D32_FLOAT;
+    depth_texture_desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+    ID3D11Texture2D *depth_texture = nullptr;
+    ID3D11DepthStencilView *depth_view = nullptr;
+    require(SUCCEEDED(device->CreateTexture2D(&depth_texture_desc, nullptr, &depth_texture)) &&
+            SUCCEEDED(device->CreateDepthStencilView(depth_texture, nullptr, &depth_view)),
+        "could not create the depth target");
+    D3D11_BUFFER_DESC uav_buffer_desc {};
+    uav_buffer_desc.ByteWidth = 4 * sizeof(std::uint32_t);
+    uav_buffer_desc.Usage = D3D11_USAGE_DEFAULT;
+    uav_buffer_desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+    uav_buffer_desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+    uav_buffer_desc.StructureByteStride = sizeof(std::uint32_t);
+    ID3D11Buffer *uav_buffer = nullptr;
+    require(SUCCEEDED(device->CreateBuffer(&uav_buffer_desc, nullptr, &uav_buffer)),
+        "could not create the output-merger UAV buffer");
+    D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc {};
+    uav_desc.Format = DXGI_FORMAT_UNKNOWN;
+    uav_desc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+    uav_desc.Buffer.NumElements = 4;
+    uav_desc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_APPEND;
+    ID3D11UnorderedAccessView *application_uav = nullptr;
+    require(SUCCEEDED(device->CreateUnorderedAccessView(
+                uav_buffer, &uav_desc, &application_uav)),
+        "could not create the output-merger UAV");
+
     constexpr UINT stride = sizeof(Vertex);
     constexpr UINT offset = 0;
     context->IASetInputLayout(input_layout);
@@ -174,7 +207,10 @@ void test_triangle_replay_produces_material_uv() {
     context->IASetIndexBuffer(index_buffer, DXGI_FORMAT_R16_UINT, 0);
     context->VSSetShader(vertex_shader, nullptr, 0);
     context->PSSetShader(pixel_shader, nullptr, 0);
-    context->OMSetRenderTargets(1, &target_view, nullptr);
+    ID3D11RenderTargetView *application_targets[2] {target_view, secondary_target_view};
+    constexpr UINT initial_uav_count = 2;
+    context->OMSetRenderTargetsAndUnorderedAccessViews(
+        2, application_targets, depth_view, 2, 1, &application_uav, &initial_uav_count);
     D3D11_BLEND_DESC blend_desc {};
     blend_desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
     ID3D11BlendState *blend_state = nullptr;
@@ -349,10 +385,22 @@ void test_triangle_replay_produces_material_uv() {
     require(restored_depth == depth_state && restored_stencil == 37,
         "depth-stencil state was not restored");
     release(restored_depth);
-    ID3D11RenderTargetView *restored_target = nullptr;
-    context->OMGetRenderTargets(1, &restored_target, nullptr);
-    require(restored_target == target_view, "render target state was not restored");
-    release(restored_target);
+    ID3D11RenderTargetView *restored_targets[2] {};
+    ID3D11DepthStencilView *restored_depth_view = nullptr;
+    context->OMGetRenderTargets(2, restored_targets, &restored_depth_view);
+    require(restored_targets[0] == target_view &&
+            restored_targets[1] == secondary_target_view,
+        "multiple render target state was not restored");
+    require(restored_depth_view == depth_view, "depth target state was not restored");
+    release(restored_targets[0]);
+    release(restored_targets[1]);
+    release(restored_depth_view);
+    ID3D11UnorderedAccessView *restored_uav = nullptr;
+    context->OMGetRenderTargetsAndUnorderedAccessViews(
+        0, nullptr, nullptr, 2, 1, &restored_uav);
+    require(restored_uav == application_uav,
+        "output-merger UAV state was not restored");
+    release(restored_uav);
     ID3D11ShaderResourceView *restored_source = nullptr;
     context->PSGetShaderResources(5, 1, &restored_source);
     require(restored_source == override_view, "source texture binding was not restored");
@@ -428,6 +476,12 @@ void test_triangle_replay_produces_material_uv() {
     release(source_texture);
     release(depth_state);
     release(blend_state);
+    release(application_uav);
+    release(uav_buffer);
+    release(depth_view);
+    release(depth_texture);
+    release(secondary_target_view);
+    release(secondary_target);
     release(target_view);
     release(target);
     release(input_layout);

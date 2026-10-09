@@ -130,6 +130,12 @@ Direct and indirect, indexed and non-indexed instanced draws share the same repl
 transaction. Indirect arguments remain GPU-resident: the application draw and the
 capture replay consume the same argument buffer and offset without a CPU readback.
 
+Replay snapshots the output-merger attachments plus UAVs, depth/stencil and blend
+state, the selected source SRV, and the pixel shader including dynamic-linkage class
+instances. All are restored after the capture draw; untouched input-assembler,
+vertex-stage, rasterizer, viewport, scissor, sampler, and constant-buffer state is
+left in place throughout.
+
 The first live adapter uses draw replay rather than modifying the game's pixel
 shader. D3D reflection selects a floating-point `TEXCOORD` from the vertex
 shader's output signature. NeuralPass executes the original draw exactly once,

@@ -171,6 +171,9 @@ sequence number before reveal-only atlas generation.
 The D3D11 adapter handles indexed and non-indexed instanced draws through both
 direct and indirect argument-buffer paths. The WARP suite executes every variant
 through the same state-preserving application-draw and capture-replay path.
+That transaction restores the selected source SRV, pixel shader and dynamic-linkage
+instances, multiple render targets, depth view/state, blend state, stencil reference,
+and output-merger UAV bindings before returning to the game.
 
 Binding identity includes shader bytecode, pixel-resource slot/content
 fingerprints, input-layout semantics, and bound vertex/index-buffer topology.

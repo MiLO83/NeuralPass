@@ -498,7 +498,12 @@ struct SurfaceCapture::Impl {
                                           &original_source);
 
         ID3D11PixelShader *original_pixel_shader = nullptr;
-        context->PSGetShader(&original_pixel_shader, nullptr, nullptr);
+        std::array<ID3D11ClassInstance *, D3D11_SHADER_MAX_INTERFACES>
+            original_pixel_classes {};
+        UINT original_pixel_class_count =
+            static_cast<UINT>(original_pixel_classes.size());
+        context->PSGetShader(&original_pixel_shader, original_pixel_classes.data(),
+                             &original_pixel_class_count);
         ID3D11BlendState *original_blend = nullptr;
         FLOAT blend_factor[4] {};
         UINT sample_mask = 0;
@@ -520,7 +525,8 @@ struct SurfaceCapture::Impl {
             ++replayed_draws;
         }
 
-        context->PSSetShader(original_pixel_shader, nullptr, 0);
+        context->PSSetShader(original_pixel_shader, original_pixel_classes.data(),
+                             original_pixel_class_count);
         context->OMSetDepthStencilState(original_depth, stencil_reference);
         context->OMSetBlendState(original_blend, blend_factor, sample_mask);
         if (uav_count > rtv_count) {
@@ -534,6 +540,8 @@ struct SurfaceCapture::Impl {
         }
 
         release(original_pixel_shader);
+        for (UINT index = 0; index < original_pixel_class_count; ++index)
+            release(original_pixel_classes[index]);
         release(original_blend);
         release(original_depth);
         release(original_source);
