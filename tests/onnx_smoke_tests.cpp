@@ -45,10 +45,13 @@ void run_backend(const std::string &model, bool directml) {
 
 int main(int argc, char **argv) {
     try {
-        require(argc == 2, "usage: neuralpass_onnx_smoke_tests MODEL_PATH");
-        run_backend(argv[1], false);
-        run_backend(argv[1], true);
-        std::cout << "NeuralPass ONNX CPU and DirectML smoke tests passed\n";
+        require(argc == 3,
+            "usage: neuralpass_onnx_smoke_tests MODEL_PATH cpu|directml");
+        const std::string provider = argv[2];
+        require(provider == "cpu" || provider == "directml",
+            "provider must be cpu or directml");
+        run_backend(argv[1], provider == "directml");
+        std::cout << "NeuralPass ONNX " << provider << " smoke test passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {
         std::cerr << "FAIL: " << error.what() << '\n';

@@ -193,7 +193,8 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [ ] Clean-machine install, update, removal, and signature verification pass.
 [~] GitHub Windows/Linux x86/x64 CI is green.
     Evidence: Linux validates the portable core; Windows builds the real x64 ReShade
-    DirectML add-on, executes the ONNX CPU/DirectML model smoke plus core and D3D11
-    WARP tests, validates packaging, and uploads it. x86 and other adapters remain.
+    DirectML add-on, executes ONNX CPU model inference plus core and D3D11 WARP tests,
+    validates packaging, and uploads it. DirectML execution passes on the development
+    NVIDIA GPU; hosted runners have no valid adapter. x86 and other adapters remain.
 [ ] No open severity-1 or severity-2 defects.
 [ ] Signed v1.0 release published.

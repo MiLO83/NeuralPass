@@ -31,6 +31,8 @@ jobs:
       - name: Build and test Windows DirectML add-on
         if: runner.os == 'Windows'
         shell: cmd
+        env:
+          NP_DIRECTML_TEST: OFF
         run: build_windows.cmd directml
       - name: Upload Windows DirectML package
         if: runner.os == 'Windows'

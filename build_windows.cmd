@@ -12,6 +12,7 @@ set "NP_ROOT=%CD%"
 set "NP_MODE=%~1"
 set "NP_MODELS=%~2"
 if not defined NP_MODE set "NP_MODE=directml"
+if not defined NP_DIRECTML_TEST set "NP_DIRECTML_TEST=ON"
 
 if /I not "%NP_MODE%"=="directml" if /I not "%NP_MODE%"=="preview" (
     echo ERROR: First argument must be directml or preview.
@@ -41,12 +42,14 @@ if /I "%NP_MODE%"=="directml" (
     cmake -S "%NP_ROOT%" -B "%NP_BUILD%" -A x64 ^
       -DNEURALPASS_BUILD_ADDON=ON ^
       -DNEURALPASS_BUILD_TESTS=ON ^
+      -DNEURALPASS_TEST_DIRECTML=%NP_DIRECTML_TEST% ^
       -DRESHADE_SDK_DIR="%NP_ROOT%\external\reshade" ^
       -DONNXRUNTIME_ROOT="%NP_ROOT%\external\onnxruntime"
 ) else (
     cmake -S "%NP_ROOT%" -B "%NP_BUILD%" -A x64 ^
       -DNEURALPASS_BUILD_ADDON=ON ^
       -DNEURALPASS_BUILD_TESTS=ON ^
+      -DNEURALPASS_TEST_DIRECTML=OFF ^
       -DRESHADE_SDK_DIR="%NP_ROOT%\external\reshade" ^
       -DONNXRUNTIME_ROOT=
 )

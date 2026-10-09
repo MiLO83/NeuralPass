@@ -3,6 +3,7 @@ project(NeuralPass VERSION 0.1.0 LANGUAGES CXX)
 
 option(NEURALPASS_BUILD_ADDON "Build the Windows ReShade add-on" ${WIN32})
 option(NEURALPASS_BUILD_TESTS "Build platform-neutral tests" ON)
+option(NEURALPASS_TEST_DIRECTML "Execute DirectML inference tests (requires a GPU adapter)" ON)
 set(RESHADE_SDK_DIR "" CACHE PATH "Path to a ReShade checkout (must contain include/reshade.hpp)")
 set(ONNXRUNTIME_ROOT "" CACHE PATH "Optional ONNX Runtime DirectML package root")
 
@@ -87,9 +88,14 @@ if(NEURALPASS_BUILD_ADDON)
                     "${ONNXRUNTIME_ROOT}/lib/onnxruntime_providers_shared.dll"
                     "${ONNXRUNTIME_ROOT}/lib/DirectML.dll"
                     "$<TARGET_FILE_DIR:neuralpass_onnx_smoke_tests>")
-            add_test(NAME neuralpass_onnx_directml
+            add_test(NAME neuralpass_onnx_cpu
                 COMMAND neuralpass_onnx_smoke_tests
-                    "${CMAKE_SOURCE_DIR}/models/downloads/candy-9.onnx")
+                    "${CMAKE_SOURCE_DIR}/models/downloads/candy-9.onnx" cpu)
+            if(NEURALPASS_TEST_DIRECTML)
+                add_test(NAME neuralpass_onnx_directml
+                    COMMAND neuralpass_onnx_smoke_tests
+                        "${CMAKE_SOURCE_DIR}/models/downloads/candy-9.onnx" directml)
+            endif()
         endif()
     else()
         message(WARNING "ONNXRUNTIME_ROOT not set: add-on will use the clearly-labelled preview backend")
