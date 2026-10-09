@@ -764,6 +764,26 @@ bool SurfaceCapture::draw_indexed(ID3D11DeviceContext *context, const UvSemantic
     });
 }
 
+bool SurfaceCapture::draw_indirect(ID3D11DeviceContext *context, const UvSemantic &uv,
+                                   std::uint64_t material_id, ID3D11Buffer *arguments,
+                                   std::uint32_t argument_offset,
+                                   int source_texture_override) {
+    if (impl_ == nullptr || arguments == nullptr) return false;
+    return impl_->replay(context, uv, material_id, source_texture_override, [&] {
+        context->DrawInstancedIndirect(arguments, argument_offset);
+    });
+}
+
+bool SurfaceCapture::draw_indexed_indirect(
+    ID3D11DeviceContext *context, const UvSemantic &uv,
+    std::uint64_t material_id, ID3D11Buffer *arguments,
+    std::uint32_t argument_offset, int source_texture_override) {
+    if (impl_ == nullptr || arguments == nullptr) return false;
+    return impl_->replay(context, uv, material_id, source_texture_override, [&] {
+        context->DrawIndexedInstancedIndirect(arguments, argument_offset);
+    });
+}
+
 std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
     ID3D11DeviceContext *context) {
     if (impl_ == nullptr || context == nullptr) return std::nullopt;

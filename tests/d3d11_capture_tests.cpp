@@ -122,6 +122,24 @@ void test_triangle_replay_produces_material_uv() {
     ID3D11Buffer *index_buffer = nullptr;
     require(SUCCEEDED(device->CreateBuffer(&index_desc, &index_data, &index_buffer)),
         "could not create the test index buffer");
+    const D3D11_DRAW_INSTANCED_INDIRECT_ARGS draw_arguments {3, 2, 0, 0};
+    D3D11_BUFFER_DESC draw_arguments_desc {};
+    draw_arguments_desc.ByteWidth = sizeof(draw_arguments);
+    draw_arguments_desc.Usage = D3D11_USAGE_DEFAULT;
+    draw_arguments_desc.MiscFlags = D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS;
+    D3D11_SUBRESOURCE_DATA draw_arguments_data {&draw_arguments, 0, 0};
+    ID3D11Buffer *draw_arguments_buffer = nullptr;
+    require(SUCCEEDED(device->CreateBuffer(&draw_arguments_desc, &draw_arguments_data,
+                                            &draw_arguments_buffer)),
+        "could not create non-indexed indirect arguments");
+    const D3D11_DRAW_INDEXED_INSTANCED_INDIRECT_ARGS indexed_arguments {3, 2, 0, 0, 0};
+    D3D11_BUFFER_DESC indexed_arguments_desc = draw_arguments_desc;
+    indexed_arguments_desc.ByteWidth = sizeof(indexed_arguments);
+    D3D11_SUBRESOURCE_DATA indexed_arguments_data {&indexed_arguments, 0, 0};
+    ID3D11Buffer *indexed_arguments_buffer = nullptr;
+    require(SUCCEEDED(device->CreateBuffer(&indexed_arguments_desc, &indexed_arguments_data,
+                                            &indexed_arguments_buffer)),
+        "could not create indexed indirect arguments");
     const std::array<D3D11_INPUT_ELEMENT_DESC, 2> input_elements {{
         {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0,
             D3D11_INPUT_PER_VERTEX_DATA, 0},
@@ -278,9 +296,9 @@ void test_triangle_replay_produces_material_uv() {
         "unsupported replacement fixture draw was not handled");
     require(capture.rejected_replacements() == 1,
         "unsupported replacement circuit breaker retried the same source");
-    require(capture.draw(context, uv_semantic, first_material_id, 3, 1, 0, 0),
+    require(capture.draw(context, uv_semantic, first_material_id, 3, 2, 0, 0),
         "capture adapter did not handle the triangle draw");
-    require(capture.draw_indexed(context, uv_semantic, material_id, 3, 1, 0, 0, 0, 5),
+    require(capture.draw_indexed(context, uv_semantic, material_id, 3, 2, 0, 0, 0, 5),
         "capture adapter did not handle the indexed triangle draw");
     const auto first_binding_pixel = read_pixel(device, context, target, 7, 7);
     require(std::abs(static_cast<int>(first_binding_pixel[0]) - 200) <= 1 &&
@@ -302,8 +320,14 @@ void test_triangle_replay_produces_material_uv() {
             std::abs(static_cast<int>(restored_binding_pixel[1]) - 10) <= 1 &&
             std::abs(static_cast<int>(restored_binding_pixel[2]) - 20) <= 1,
         "first binding replacement was contaminated by the second binding");
-    require(capture.replayed_draws() == 6, "draw variants were not each replayed once");
-    require(capture.replacement_draws() == 3,
+    require(capture.draw_indexed_indirect(context, uv_semantic, shared_source_material_id,
+                                          indexed_arguments_buffer, 0, 5),
+        "capture adapter did not handle the indexed instanced indirect draw");
+    require(capture.draw_indirect(context, uv_semantic, material_id,
+                                  draw_arguments_buffer, 0, 5),
+        "capture adapter did not handle the instanced indirect draw");
+    require(capture.replayed_draws() == 8, "draw variants were not each replayed once");
+    require(capture.replacement_draws() == 5,
         "replacement draw accounting did not report all substituted draws");
 
     ID3D11PixelShader *restored_pixel_shader = nullptr;
@@ -407,6 +431,8 @@ void test_triangle_replay_produces_material_uv() {
     release(target_view);
     release(target);
     release(input_layout);
+    release(indexed_arguments_buffer);
+    release(draw_arguments_buffer);
     release(index_buffer);
     release(vertex_buffer);
     release(pixel_shader);

@@ -168,6 +168,10 @@ Windows WARP test covers indexed and non-indexed replay, derivative capture,
 and state restoration. Capture frames and framebuffer frames are paired by GPU
 sequence number before reveal-only atlas generation.
 
+The D3D11 adapter handles indexed and non-indexed instanced draws through both
+direct and indirect argument-buffer paths. The WARP suite executes every variant
+through the same state-preserving application-draw and capture-replay path.
+
 Binding identity includes shader bytecode, pixel-resource slot/content
 fingerprints, input-layout semantics, and bound vertex/index-buffer topology.
 Immutable geometry uploads are restart-stable. Once a geometry buffer is

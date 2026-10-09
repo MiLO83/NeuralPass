@@ -787,6 +787,40 @@ bool on_baker_draw_indexed(reshade::api::command_list *command_list,
         first_instance, source_override);
 }
 
+bool on_baker_draw_indirect(reshade::api::command_list *command_list,
+                            reshade::api::indirect_command type,
+                            reshade::api::resource buffer, std::uint64_t offset,
+                            std::uint32_t draw_count, std::uint32_t) {
+    if ((type != reshade::api::indirect_command::draw &&
+         type != reshade::api::indirect_command::draw_indexed) ||
+        buffer.handle == 0 || draw_count != 1 || offset > UINT_MAX)
+        return false;
+    const auto material = record_baker_draw(command_list, 0, 1);
+    if (material.value == 0 || command_list->get_device()->get_api() !=
+            reshade::api::device_api::d3d11) return false;
+    const auto *state = command_list->get_private_data<BakerCommandState>();
+    neuralpass::d3d11_capture::UvSemantic uv;
+    neuralpass::d3d11_capture::SurfaceCapture *capture = nullptr;
+    int source_override = -1;
+    {
+        std::lock_guard lock(g_baker_probe_mutex);
+        if (const auto found = g_vertex_uv_outputs.find(state->vertex_pipeline.handle);
+            found != g_vertex_uv_outputs.end()) uv = found->second;
+        if (const auto found = g_d3d11_captures.find(command_list->get_device());
+            found != g_d3d11_captures.end()) capture = found->second.get();
+        if (const auto found = g_source_slot_overrides.find(material.value);
+            found != g_source_slot_overrides.end()) source_override = found->second;
+    }
+    if (capture == nullptr || !uv.valid()) return false;
+    auto *context = reinterpret_cast<ID3D11DeviceContext *>(command_list->get_native());
+    auto *arguments = reinterpret_cast<ID3D11Buffer *>(buffer.handle);
+    if (type == reshade::api::indirect_command::draw)
+        return capture->draw_indirect(context, uv, material.value, arguments,
+                                      static_cast<std::uint32_t>(offset), source_override);
+    return capture->draw_indexed_indirect(context, uv, material.value, arguments,
+                                          static_cast<std::uint32_t>(offset), source_override);
+}
+
 struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::mutex mutex;
     std::condition_variable_any wake;
@@ -1996,6 +2030,7 @@ extern "C" __declspec(dllexport) bool AddonInit(HMODULE addon_module, HMODULE re
     reshade::register_event<reshade::addon_event::bind_descriptor_tables>(on_baker_bind_descriptor_tables);
     reshade::register_event<reshade::addon_event::draw>(on_baker_draw);
     reshade::register_event<reshade::addon_event::draw_indexed>(on_baker_draw_indexed);
+    reshade::register_event<reshade::addon_event::draw_or_dispatch_indirect>(on_baker_draw_indirect);
     reshade::register_event<reshade::addon_event::init_effect_runtime>(on_init);
     reshade::register_event<reshade::addon_event::destroy_effect_runtime>(on_destroy);
     reshade::register_event<reshade::addon_event::reshade_reloaded_effects>(find_effect_variables);

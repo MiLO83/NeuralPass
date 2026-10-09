@@ -90,10 +90,14 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [ ] Production D3D10 x86/x64 capture and replacement.
 [~] Production D3D11 x86/x64 capture and replacement.
     Evidence: x64 D3D11 capture plus coverage-safe RGBA8/BGRA8 substitution passes WARP;
-    x86, broad formats, indirect draws, and real-game validation remain.
+    direct/indirect indexed and non-indexed instanced draws are covered; x86, broad
+    formats, and real-game validation remain.
 [ ] Production D3D12 x64 capture and replacement.
 [ ] Production Vulkan x86/x64 capture and replacement.
-[ ] Support indexed, non-indexed, instanced, and indirect draws.
+[~] Support indexed, non-indexed, instanced, and indirect draws.
+    Evidence: the D3D11 adapter handles direct and indirect indexed/non-indexed
+    instanced draws, with application draw, capture replay, and replacement verified
+    under WARP; equivalent support remains for every other API adapter.
 [ ] Restore every touched pipeline, descriptor, target, depth, UAV, and dynamic state.
 [~] Implement aggressive base-color binding selection and manual correction.
     Evidence: D3D11 ranks bound sampleable 2D color SRVs and captures the selected

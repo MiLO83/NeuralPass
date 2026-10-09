@@ -126,6 +126,10 @@ geometry neither pollutes a cross-launch cache nor creates one identity per fram
 
 ### D3D11 replay adapter
 
+Direct and indirect, indexed and non-indexed instanced draws share the same replay
+transaction. Indirect arguments remain GPU-resident: the application draw and the
+capture replay consume the same argument buffer and offset without a CPU readback.
+
 The first live adapter uses draw replay rather than modifying the game's pixel
 shader. D3D reflection selects a floating-point `TEXCOORD` from the vertex
 shader's output signature. NeuralPass executes the original draw exactly once,
