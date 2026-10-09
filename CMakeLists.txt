@@ -9,6 +9,7 @@ set(ONNXRUNTIME_ROOT "" CACHE PATH "Optional ONNX Runtime DirectML package root"
 add_library(neuralpass_core STATIC
     src/atlas_cache.cpp
     src/binding_identity.cpp
+    src/depth_pyramid.cpp
     src/inference_preview.cpp
     src/scene_cache.cpp
     src/surface_capture.cpp

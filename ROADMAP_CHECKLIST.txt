@@ -31,8 +31,12 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [~] Capture UV gradients, linear depth, motion, and confidence for every supported adapter.
     Evidence: D3D11 second-MRT UV-gradient/confidence capture passes WARP;
     linear depth, motion, and the other API adapters remain.
-[ ] Build hierarchical current/previous depth pyramids.
-[ ] Raymarch visibility using engine motion, camera inference, then optical flow.
+[~] Build hierarchical current/previous depth pyramids.
+    Evidence: backend-neutral conservative min/max hierarchy and dimension/bounds tests;
+    live adapters still need linear-depth feeds for both frames.
+[~] Raymarch visibility using engine motion, camera inference, then optical flow.
+    Evidence: conservative hierarchical projected-segment validator and occlusion tests;
+    ordered motion-source integration remains.
 [ ] Classify known, disoccluded, newly front-facing, off-screen-entry, and unsupported samples.
 [ ] Add manual Keep current scene, Start new scene, and Merge scene controls.
 [ ] Prove that uncertain scene classification commits no texture data.

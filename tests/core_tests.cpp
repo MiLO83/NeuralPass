@@ -1,5 +1,6 @@
 #include "neuralpass/temporal.hpp"
 #include "neuralpass/binding_identity.hpp"
+#include "neuralpass/depth_pyramid.hpp"
 #include "neuralpass/tile_scheduler.hpp"
 #include "neuralpass/inference.hpp"
 #include "neuralpass/scene_cache.hpp"
@@ -129,6 +130,30 @@ static void test_binding_identity_is_pipeline_and_slot_specific() {
     transient[0].restart_stable = false;
     require(!make_binding_instance_key(pipeline, transient, true).restart_stable,
             "transient descriptor identity was marked restart-stable");
+}
+
+static void test_depth_pyramid_and_conservative_raymarch() {
+    Image<float> depth(8, 4, 10.0f);
+    depth.at(4, 2) = 2.0f;
+    depth.at(7, 3) = std::numeric_limits<float>::quiet_NaN();
+    DepthPyramid pyramid(depth);
+    require(pyramid.level_count() == 4 &&
+            pyramid.level(1).minimum.width() == 4 &&
+            pyramid.level(1).minimum.height() == 2 &&
+            pyramid.level(3).minimum.width() == 1,
+            "depth pyramid dimensions are incorrect");
+    require(pyramid.level(3).minimum.at(0, 0) == 2.0f &&
+            pyramid.level(3).maximum.at(0, 0) == 10.0f,
+            "depth pyramid did not preserve conservative depth bounds");
+    require(!depth_segment_visible(pyramid, 0.0f, 2.0f, 5.0f,
+                                   7.0f, 2.0f, 5.0f),
+            "hierarchical raymarch missed a foreground occluder");
+    require(depth_segment_visible(pyramid, 0.0f, 0.0f, 5.0f,
+                                  7.0f, 0.0f, 5.0f),
+            "hierarchical raymarch rejected an unobstructed segment");
+    require(!depth_segment_visible(pyramid, -1.0f, 0.0f, 5.0f,
+                                   7.0f, 0.0f, 5.0f),
+            "out-of-bounds raymarch endpoint was accepted");
 }
 
 static void test_texture_baker_splats_inpaints_and_reconstructs() {
@@ -514,6 +539,7 @@ int main() {
         test_age_refresh();
         test_preview_backend_is_bounded();
         test_binding_identity_is_pipeline_and_slot_specific();
+        test_depth_pyramid_and_conservative_raymarch();
         test_texture_baker_splats_inpaints_and_reconstructs();
         test_texture_baker_locks_observed_texels_and_rejects_bad_depth();
         test_elliptical_uv_splat_uses_gradients_and_confidence();
