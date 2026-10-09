@@ -63,7 +63,9 @@ binding. Overrides backed by stable shader and texture fingerprints persist in
 the game's ReShade configuration; handle-derived identities remain session-local
 to avoid leaking a correction to an unrelated resource after restart. The replay samples only the forced
 slot when an override is active and emits no source observation if that slot is
-not a compatible texture/sampler pair.
+not a compatible texture/sampler pair. Fully transparent samples are discarded
+from all capture targets so a common base-color-alpha cutout cannot become a
+texture bake observation.
 
 The local/world RGB8 planes produced by the StreamDiffusion bridge are optical-
 flow coordinates into a prior screen image. They stabilize live generation but

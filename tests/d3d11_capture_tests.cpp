@@ -184,6 +184,9 @@ void test_triangle_replay_produces_material_uv() {
         override_pixels[index + 2] = 240;
         override_pixels[index + 3] = 191;
     }
+    // The bottom-left source texel is a cutout. The second replay must discard
+    // it, leaving the first draw's identity in the capture target at that pixel.
+    override_pixels[(3 * 4 + 0) * 4 + 3] = 0;
     const D3D11_SUBRESOURCE_DATA override_data {override_pixels.data(), 4 * 4, 0};
     ID3D11Texture2D *override_texture = nullptr;
     ID3D11ShaderResourceView *override_view = nullptr;
@@ -254,6 +257,9 @@ void test_triangle_replay_produces_material_uv() {
             std::abs(center.source_b - 240.0f/255.0f) < 0.01f &&
             std::abs(center.source_a - 191.0f/255.0f) < 0.01f,
         "per-binding source slot override did not select the requested texture");
+    const auto &cutout = captured->pixels().at(1, 6);
+    require(cutout.material_id == first_material_id,
+        "fully transparent source texel was incorrectly captured as visible geometry");
 
     capture.reset();
     release(override_view);

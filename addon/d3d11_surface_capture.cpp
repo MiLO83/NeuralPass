@@ -200,6 +200,7 @@ struct SurfaceCapture::Impl {
                << "output.gradients = float4(dx.x,dy.x,dx.y,dy.y); "
                << (source_binding.valid()
                     ? "output.source = source_texture.Sample(source_sampler,input.uv); "
+                      "clip(output.source.a - (0.5f/255.0f)); "
                     : "output.source = float4(asfloat(0x7fc00000u),asfloat(0x7fc00000u),"
                       "asfloat(0x7fc00000u),asfloat(0x7fc00000u)); ")
                << "return output; }\n";

@@ -199,9 +199,9 @@ backend without starting the game.
 
 - Geometry-aware persistent baking is currently experimental on D3D11 only;
   this is not yet a cross-API production release.
-- The D3D11 replay shader cannot reproduce application pixel-shader `discard`
-  or alpha-test logic yet, so cutout/translucent materials may produce invalid
-  correspondence around transparent texels.
+- The D3D11 replay shader rejects fully transparent texels from its selected
+  source texture, but cannot reproduce application-specific `discard`, custom
+  alpha thresholds, or opacity sourced from another texture yet.
 - D3D11 base-color selection is heuristic. If an unusual material layout selects
   a normal/emissive texture, use the per-binding source-SRV override in the overlay;
   overrides persist in the game's ReShade configuration when the binding identity

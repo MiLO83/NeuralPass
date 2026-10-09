@@ -65,7 +65,8 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [ ] Isolate UV islands, overlapping layers, bindings, and materials.
 [~] Preserve source alpha and original pixels outside style coverage.
     Evidence: source-aware transfer preserves texture alpha and framebuffer reconstruction
-    retains fallback outside coverage; GPU replacement assembly remains.
+    retains fallback outside coverage; D3D11 rejects fully transparent selected-source
+    texels before capture. GPU replacement assembly and custom alpha tests remain.
 [x] Track unseen-original, direct-observation, and newly-visible-inpaint coverage.
     Evidence: explicit atlas coverage states, provenance commit test, and cache format test.
 [x] Let later direct observations supersede inpainted texels.
