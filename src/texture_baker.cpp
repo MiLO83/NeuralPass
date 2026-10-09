@@ -65,7 +65,8 @@ void MaterialTextureAtlas::splat(
 
 bool MaterialTextureAtlas::observe(const Color &observed,
                                    const SurfaceCorrespondence &sample,
-                                   const TextureBakeSettings &settings) {
+                                   const TextureBakeSettings &settings,
+                                   TextureSampleKind kind) {
     if (color_.empty() || sample.material_id != material_id_ ||
         !valid_observation(sample, settings))
         return false;
@@ -88,11 +89,14 @@ bool MaterialTextureAtlas::observe(const Color &observed,
         const auto y = texel(ys[corner], height(), settings.wrap_v);
         const float vote = bilinear[corner] * sample.confidence * settings.observation_weight;
         if (!std::isfinite(vote) || vote <= std::numeric_limits<float>::epsilon()) continue;
-        if (settings.fill_only_unobserved && coverage_.at(x, y) == kObserved) continue;
+        const auto existing = coverage_.at(x, y);
+        if (kind == TextureSampleKind::generated_inpaint && existing != kUnseen) continue;
+        if (settings.fill_only_unobserved && existing == kObserved) continue;
         if (settings.fill_only_unobserved) {
             color_.at(x, y) = observed;
             history_weight_.at(x, y) = vote;
-            coverage_.at(x, y) = kObserved;
+            coverage_.at(x, y) = kind == TextureSampleKind::direct_observation
+                ? kObserved : kInpainted;
             accepted = true;
             continue;
         }
@@ -101,7 +105,8 @@ bool MaterialTextureAtlas::observe(const Color &observed,
         const float total = retained + vote;
         color_.at(x, y) = mix(color_.at(x, y), observed, vote / total);
         history_weight_.at(x, y) = std::min(total, std::max(vote, settings.maximum_history_weight));
-        coverage_.at(x, y) = kObserved;
+        coverage_.at(x, y) = kind == TextureSampleKind::direct_observation
+            ? kObserved : kInpainted;
         accepted = true;
     }
     return accepted;
@@ -252,6 +257,9 @@ MaterialTextureBakePlan MaterialTextureBaker::plan(
     MaterialTextureBakePlan result;
     result.composite = live_frame;
     result.reveal_mask = Image<std::uint8_t>(live_frame.width(), live_frame.height(), 0);
+    result.source_alpha = Image<float>(live_frame.width(), live_frame.height(), 1.0f);
+    for (std::size_t index = 0; index < live_frame.size(); ++index)
+        result.source_alpha.pixels()[index] = live_frame.pixels()[index].a;
     result.epoch = epoch_;
     for (const auto &sample : correspondence) {
         if (sample.screen_x >= live_frame.width() || sample.screen_y >= live_frame.height() ||
@@ -278,7 +286,9 @@ MaterialTextureBakeStats MaterialTextureBaker::commit(
     MaterialTextureBakeStats stats;
     stats.submitted = correspondence.size();
     if (plan.epoch != epoch_ || plan.reveal_mask.width() != inpainted_frame.width() ||
-        plan.reveal_mask.height() != inpainted_frame.height()) {
+        plan.reveal_mask.height() != inpainted_frame.height() ||
+        plan.source_alpha.width() != inpainted_frame.width() ||
+        plan.source_alpha.height() != inpainted_frame.height()) {
         stats.stale = true;
         return stats;
     }
@@ -290,8 +300,10 @@ MaterialTextureBakeStats MaterialTextureBaker::commit(
             continue;
         auto [entry, inserted] = atlases_.try_emplace(
             sample.material_id, sample.material_id, settings_.atlas_width, settings_.atlas_height);
-        if (entry->second.observe(inpainted_frame.at(sample.screen_x, sample.screen_y),
-                                  sample, settings_.texture)) {
+        auto generated = inpainted_frame.at(sample.screen_x, sample.screen_y);
+        generated.a = plan.source_alpha.at(sample.screen_x, sample.screen_y);
+        if (entry->second.observe(generated, sample, settings_.texture,
+                                  TextureSampleKind::generated_inpaint)) {
             ++stats.accepted;
             touched.insert(sample.material_id);
         } else if (inserted) {

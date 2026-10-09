@@ -234,6 +234,33 @@ static void test_baker_plans_only_newly_revealed_texels_and_rejects_cut_results(
             "camera-cut invalidation discarded established material atlases");
 }
 
+static void test_inpaint_provenance_alpha_and_direct_observation_supersession() {
+    MaterialTextureBaker baker({.atlas_width=16, .atlas_height=8});
+    Image<Color> live(1, 1, {0.2f, 0.3f, 0.4f, 0.35f});
+    const SurfaceCorrespondence sample {0, 0, 81, 0.5f, 0.5f, 1.0f};
+    const auto plan = baker.plan(live, std::span(&sample, 1));
+    Image<Color> generated(1, 1, {0.9f, 0.1f, 0.2f, 1.0f});
+    require(baker.commit(plan, generated, std::span(&sample, 1)).accepted == 1,
+            "generated reveal was not committed");
+    const auto *atlas = baker.find(81);
+    require(atlas != nullptr && atlas->coverage().at(7, 3) == MaterialTextureAtlas::kInpainted,
+            "generated reveal was incorrectly marked as a direct observation");
+    require(std::abs(atlas->sample(0.5f, 0.5f).a - 0.35f) < 0.001f,
+            "generated reveal changed source alpha");
+
+    Image<Color> directly_observed(1, 1, {0.1f, 0.8f, 0.2f, 0.35f});
+    require(baker.update(directly_observed, std::span(&sample, 1)).accepted == 1,
+            "direct observation did not supersede generated coverage");
+    atlas = baker.find(81);
+    require(atlas->coverage().at(7, 3) == MaterialTextureAtlas::kObserved &&
+            atlas->sample(0.5f, 0.5f).g > atlas->sample(0.5f, 0.5f).r,
+            "direct observation did not replace prior inpainted texels");
+
+    const auto second_plan = baker.plan(live, std::span(&sample, 1));
+    require(second_plan.revealed_pixels == 0 && second_plan.known_pixels == 1,
+            "covered direct observation was scheduled for regeneration");
+}
+
 static void test_surface_capture_compacts_backend_neutral_pixels() {
     SurfaceCaptureFrame capture(3, 2);
     capture.pixels().at(0, 0) = {101, 0.25f, 0.75f, 0.4f, 0.4f, 0.9f};
@@ -393,6 +420,7 @@ int main() {
         test_uncovered_atlas_never_reconstructs_debug_sentinel();
         test_partial_atlas_sampling_ignores_unseen_neighbors();
         test_baker_plans_only_newly_revealed_texels_and_rejects_cut_results();
+        test_inpaint_provenance_alpha_and_direct_observation_supersession();
         test_surface_capture_compacts_backend_neutral_pixels();
         test_scene_transition_preserves_camera_cuts_and_confirms_new_scenes();
         test_same_scene_camera_cut_preserves_atlas_and_reveals_new_uvs();

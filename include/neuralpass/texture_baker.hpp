@@ -38,6 +38,11 @@ struct TextureBakeSettings {
     float depth_relative_threshold = 0.02f;
 };
 
+enum class TextureSampleKind : std::uint8_t {
+    generated_inpaint,
+    direct_observation,
+};
+
 class MaterialTextureAtlas {
 public:
     static constexpr Color kUnpaintedColor {1.0f, 0.0f, 1.0f, 1.0f};
@@ -59,7 +64,8 @@ public:
     // Records one verified screen observation. Returns false when the sample
     // does not belong to this material or fails bounds/depth validation.
     bool observe(const Color &restyled, const SurfaceCorrespondence &correspondence,
-                 const TextureBakeSettings &settings = {});
+                 const TextureBakeSettings &settings = {},
+                 TextureSampleKind kind = TextureSampleKind::direct_observation);
     void splat(const Image<Color> &restyled_screen,
                std::span<const SurfaceCorrespondence> correspondence,
                const TextureBakeSettings &settings = {});
@@ -106,6 +112,9 @@ struct MaterialTextureBakePlan {
     // pixels intentionally retain the live color until an inpaint result lands.
     Image<Color> composite;
     Image<std::uint8_t> reveal_mask;
+    // Inference output alpha is not authoritative. Keep the live framebuffer
+    // alpha alongside the request so generated texels cannot alter cutouts.
+    Image<float> source_alpha;
     std::uint64_t epoch = 0;
     std::size_t known_pixels = 0;
     std::size_t revealed_pixels = 0;
