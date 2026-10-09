@@ -53,6 +53,9 @@ struct DrawCommand {
     std::uint64_t argument_offset = 0;
     std::uint32_t draw_count = 1;
     std::uint32_t argument_stride = 0;
+    // ReShade primitive_topology numeric value. Legacy D3D9 draw calls carry
+    // topology per draw, so that adapter cannot replay safely without it.
+    std::uint32_t primitive_topology = 0;
     // API-neutral snapshot of the graphics state required by explicit backends.
     // Legacy immediate-context adapters may ignore these opaque handles.
     std::uint64_t pipeline = 0;

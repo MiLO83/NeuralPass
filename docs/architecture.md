@@ -97,8 +97,10 @@ Backend adapters own shader instrumentation, resource-state transitions, and
 asynchronous GPU readback. They all decode into `SurfaceCaptureFrame`, whose
 validation and compaction rules are shared. A backend may leave unsupported
 pixels at material ID/confidence zero, allowing mixed supported and unsupported
-draws in the same frame. No adapter is allowed to stall presentation for a
-readback; late frames are dropped in favor of the newest complete capture.
+draws in the same frame. Modern adapters do not stall presentation for readback;
+late frames are dropped in favor of the newest complete capture. The legacy D3D9
+preview is the explicit exception and reports that limitation because its portable
+system-memory transfer is synchronous.
 
 The canonical planes map naturally to every target API: a two-component
 unsigned target for the 64-bit stable material ID, a two-component float target
@@ -159,6 +161,25 @@ readback nonblocking. For non-array RGBA8/BGRA8 sources it clones the original
 resource and patches only covered atlas runs, keeping replacements isolated by
 material identity. D3D10 has no general indirect draw entry point; device-loss
 and real-game evidence remain promotion gates.
+
+### D3D9 replay adapter
+
+D3D9 uses a genuinely separate Shader Model 3 path. A bounded token parser accepts
+only vertex-shader `dcl_texcoord` outputs, and a legacy pixel shader writes four
+floating-point MRTs: four exact 16-bit material-ID chunks, UV/confidence, UV
+gradients, and selected source color. The original draw executes once; a full
+state block plus explicit render/depth attachment snapshots restore every touched
+binding after capture. Native D3D9 topology is reconstructed from ReShade's
+dynamic topology event. Indexed replay derives a conservative valid vertex range
+from stream zero because D3D9's original min/max index range is absent from the
+cross-API draw event.
+
+Replacement is limited to lockable `A8R8G8B8`, `X8R8G8B8`, or `A8B8G8R8`
+2D textures. The adapter copies every source mip through system memory, patches
+only covered atlas texels, uploads a distinct default-pool texture per material,
+and restores the original texture before capture. Portable D3D9 readback is
+synchronous, and Shader Model 3 cannot expose post-raster fragment depth here;
+both facts are reported rather than hidden behind an asynchronous/depth claim.
 
 ### D3D12 replay adapter
 

@@ -3,6 +3,7 @@
 #include <reshade.hpp>
 #include <descriptor_tracking.hpp>
 
+#include "d3d9_surface_capture.hpp"
 #include "d3d10_surface_capture.hpp"
 #include "d3d11_surface_capture.hpp"
 #include "d3d12_surface_capture.hpp"
@@ -181,6 +182,8 @@ struct __declspec(uuid("69062FC3-7159-466E-A9B2-4E505542414B")) BakerCommandStat
     std::uint32_t render_target_count = 0;
     reshade::api::resource_view depth_stencil = {};
     bool inside_render_pass = false;
+    reshade::api::primitive_topology primitive_topology =
+        reshade::api::primitive_topology::undefined;
     std::unordered_map<std::uint64_t, BakerPixelResource> pixel_resources;
     std::unordered_map<std::uint64_t, BakerPixelSampler> pixel_samplers;
     std::unordered_map<std::uint32_t, BakerDescriptorTable> descriptor_tables;
@@ -248,13 +251,17 @@ void on_baker_init_pipeline(reshade::api::device *device, reshade::api::pipeline
                     hash_bytes(pipeline_fingerprint, shaders[shader].entry_point,
                                std::strlen(shaders[shader].entry_point));
             }
-            if ((device->get_api() == reshade::api::device_api::d3d10 ||
+            if ((device->get_api() == reshade::api::device_api::d3d9 ||
+                 device->get_api() == reshade::api::device_api::d3d10 ||
                  device->get_api() == reshade::api::device_api::d3d11 ||
                  device->get_api() == reshade::api::device_api::d3d12) &&
                 subobject.type == reshade::api::pipeline_subobject_type::vertex_shader &&
                 subobject.count != 0) {
-                const auto uv = neuralpass::d3d11_capture::inspect_uv_output(
-                    shaders[0].code, shaders[0].code_size);
+                const auto uv = device->get_api() == reshade::api::device_api::d3d9
+                    ? neuralpass::d3d9_capture::inspect_uv_output(
+                        shaders[0].code, shaders[0].code_size)
+                    : neuralpass::d3d11_capture::inspect_uv_output(
+                        shaders[0].code, shaders[0].code_size);
                 if (uv.valid()) {
                     std::lock_guard lock(g_baker_probe_mutex);
                     g_vertex_uv_outputs[pipeline.handle] = uv;
@@ -517,6 +524,18 @@ void on_baker_bind_pipeline(reshade::api::command_list *command_list,
             state->descriptor_tables.clear();
         }
     }
+}
+
+void on_baker_bind_pipeline_states(reshade::api::command_list *command_list,
+                                   std::uint32_t count,
+                                   const reshade::api::dynamic_state *states,
+                                   const std::uint32_t *values) {
+    auto *state = command_list->get_private_data<BakerCommandState>();
+    if (state == nullptr || states == nullptr || values == nullptr) return;
+    for (std::uint32_t index = 0; index < count; ++index)
+        if (states[index] == reshade::api::dynamic_state::primitive_topology)
+            state->primitive_topology =
+                static_cast<reshade::api::primitive_topology>(values[index]);
 }
 
 std::uint64_t descriptor_slot(reshade::api::pipeline_layout layout,
@@ -1046,7 +1065,8 @@ bool on_baker_draw(reshade::api::command_list *command_list, std::uint32_t verte
     const auto material = record_baker_draw(command_list, vertex_count, instance_count);
     const auto api = command_list->get_device()->get_api();
     if (material.value == 0 ||
-        (api != reshade::api::device_api::d3d10 &&
+        (api != reshade::api::device_api::d3d9 &&
+         api != reshade::api::device_api::d3d10 &&
          api != reshade::api::device_api::d3d11 &&
          api != reshade::api::device_api::d3d12 &&
          api != reshade::api::device_api::vulkan)) return false;
@@ -1069,6 +1089,7 @@ bool on_baker_draw(reshade::api::command_list *command_list, std::uint32_t verte
         .instance_count = instance_count,
         .first_vertex_or_index = first_vertex,
         .first_instance = first_instance,
+        .primitive_topology = static_cast<std::uint32_t>(state->primitive_topology),
     };
     configure_explicit_draw_state(command_list, *state, capture, draw, source_override);
     return capture != nullptr && uv.valid() && capture->replay(
@@ -1083,7 +1104,8 @@ bool on_baker_draw_indexed(reshade::api::command_list *command_list,
     const auto material = record_baker_draw(command_list, index_count, instance_count);
     const auto api = command_list->get_device()->get_api();
     if (material.value == 0 ||
-        (api != reshade::api::device_api::d3d10 &&
+        (api != reshade::api::device_api::d3d9 &&
+         api != reshade::api::device_api::d3d10 &&
          api != reshade::api::device_api::d3d11 &&
          api != reshade::api::device_api::d3d12 &&
          api != reshade::api::device_api::vulkan)) return false;
@@ -1107,6 +1129,7 @@ bool on_baker_draw_indexed(reshade::api::command_list *command_list,
         .first_vertex_or_index = first_index,
         .vertex_offset = vertex_offset,
         .first_instance = first_instance,
+        .primitive_topology = static_cast<std::uint32_t>(state->primitive_topology),
     };
     configure_explicit_draw_state(command_list, *state, capture, draw, source_override);
     return capture != nullptr && uv.valid() && capture->replay(
@@ -1943,7 +1966,20 @@ void on_init(reshade::api::effect_runtime *runtime) {
                                               &state->copy_fence))
         reshade::log::message(reshade::log::level::error, "NeuralPass could not create its copy fence.");
     state->worker = std::jthread([state](std::stop_token token) { process_frames(state, token); });
-    if (runtime->get_device()->get_api() == reshade::api::device_api::d3d10) {
+    if (runtime->get_device()->get_api() == reshade::api::device_api::d3d9) {
+        const auto back_buffer = runtime->get_back_buffer(0);
+        const auto desc = runtime->get_device()->get_resource_desc(back_buffer);
+        auto capture = std::make_unique<neuralpass::d3d9_capture::SurfaceCapture>();
+        if (capture->initialize(
+                reinterpret_cast<IDirect3DDevice9 *>(runtime->get_device()->get_native()),
+                desc.texture.width, desc.texture.height)) {
+            std::lock_guard lock(g_baker_probe_mutex);
+            g_surface_captures[runtime->get_device()] = std::move(capture);
+        } else {
+            reshade::log::message(reshade::log::level::warning,
+                "NeuralPass could not initialize the D3D9 mesh-UV capture surface.");
+        }
+    } else if (runtime->get_device()->get_api() == reshade::api::device_api::d3d10) {
         const auto back_buffer = runtime->get_back_buffer(0);
         const auto desc = runtime->get_device()->get_resource_desc(back_buffer);
         auto capture = std::make_unique<neuralpass::d3d10_capture::SurfaceCapture>();
@@ -2069,7 +2105,8 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
     auto *queue = runtime->get_command_queue();
     const auto source = device->get_resource_from_view(rtv);
     const auto source_desc = device->get_resource_desc(source);
-    if ((device->get_api() == reshade::api::device_api::d3d10 ||
+    if ((device->get_api() == reshade::api::device_api::d3d9 ||
+         device->get_api() == reshade::api::device_api::d3d10 ||
          device->get_api() == reshade::api::device_api::d3d11 ||
          device->get_api() == reshade::api::device_api::d3d12 ||
          device->get_api() == reshade::api::device_api::vulkan) && command_list != nullptr) {
@@ -2342,6 +2379,7 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
             replacement_draws = statistics.replacement_draws;
             rejected_replacements = statistics.rejected_replacements;
             switch (found->second->backend()) {
+            case neuralpass::capture::GraphicsBackend::d3d9: capture_backend = "D3D9"; break;
             case neuralpass::capture::GraphicsBackend::d3d10: capture_backend = "D3D10"; break;
             case neuralpass::capture::GraphicsBackend::d3d11: capture_backend = "D3D11"; break;
             case neuralpass::capture::GraphicsBackend::d3d12: capture_backend = "D3D12"; break;
@@ -2362,7 +2400,9 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         ImGui::TextWrapped("Waiting for an explicit or location-inferred mesh UV vertex input.");
     else
         ImGui::TextWrapped(
-            runtime->get_device()->get_api() == reshade::api::device_api::d3d10
+            runtime->get_device()->get_api() == reshade::api::device_api::d3d9
+                ? "D3D9 Shader Model 3 draws use legacy replay; depth is unavailable."
+            : runtime->get_device()->get_api() == reshade::api::device_api::d3d10
                 ? "D3D10 UV-bearing draws use native replay and isolated RGBA replacement."
             : runtime->get_device()->get_api() == reshade::api::device_api::d3d11
                 ? "D3D11 UV-bearing draws are replayed into the asynchronous surface capture."
@@ -2464,6 +2504,7 @@ extern "C" __declspec(dllexport) bool AddonInit(HMODULE addon_module, HMODULE re
     reshade::register_event<reshade::addon_event::init_command_list>(on_baker_init_command_list);
     reshade::register_event<reshade::addon_event::destroy_command_list>(on_baker_destroy_command_list);
     reshade::register_event<reshade::addon_event::bind_pipeline>(on_baker_bind_pipeline);
+    reshade::register_event<reshade::addon_event::bind_pipeline_states>(on_baker_bind_pipeline_states);
     reshade::register_event<reshade::addon_event::bind_vertex_buffers>(on_baker_bind_vertex_buffers);
     reshade::register_event<reshade::addon_event::bind_index_buffer>(on_baker_bind_index_buffer);
     reshade::register_event<reshade::addon_event::bind_render_targets_and_depth_stencil>(on_baker_bind_targets);

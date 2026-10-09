@@ -36,6 +36,16 @@ if(NEURALPASS_BUILD_TESTS)
     target_compile_features(neuralpass_vulkan_spirv_tests PRIVATE cxx_std_20)
     add_test(NAME neuralpass_vulkan_spirv COMMAND neuralpass_vulkan_spirv_tests)
     if(WIN32)
+        add_executable(neuralpass_d3d9_capture_tests
+            addon/d3d9_surface_capture.cpp
+            tests/d3d9_capture_tests.cpp)
+        target_include_directories(neuralpass_d3d9_capture_tests PRIVATE include addon)
+        target_compile_features(neuralpass_d3d9_capture_tests PRIVATE cxx_std_20)
+        target_compile_definitions(neuralpass_d3d9_capture_tests PRIVATE
+            WIN32_LEAN_AND_MEAN NOMINMAX)
+        target_link_libraries(neuralpass_d3d9_capture_tests PRIVATE
+            neuralpass_core d3d9 d3dcompiler user32)
+        add_test(NAME neuralpass_d3d9_capture COMMAND neuralpass_d3d9_capture_tests)
         add_executable(neuralpass_d3d10_capture_tests
             addon/d3d10_surface_capture.cpp
             tests/d3d10_capture_tests.cpp)
@@ -78,6 +88,7 @@ if(NEURALPASS_BUILD_ADDON)
         message(FATAL_ERROR "Set RESHADE_SDK_DIR to a ReShade source checkout")
     endif()
     add_library(NeuralPassAddon SHARED
+        addon/d3d9_surface_capture.cpp
         addon/d3d10_surface_capture.cpp
         addon/d3d11_surface_capture.cpp
         addon/d3d12_surface_capture.cpp
@@ -88,7 +99,7 @@ if(NEURALPASS_BUILD_ADDON)
     target_include_directories(NeuralPassAddon PRIVATE include
         "${RESHADE_SDK_DIR}/include" "${RESHADE_SDK_DIR}/deps/imgui"
         "${RESHADE_SDK_DIR}/examples/utils")
-    target_link_libraries(NeuralPassAddon PRIVATE neuralpass_core d3d10 d3d11 d3d12 d3dcompiler)
+    target_link_libraries(NeuralPassAddon PRIVATE neuralpass_core d3d9 d3d10 d3d11 d3d12 d3dcompiler)
     target_compile_definitions(NeuralPassAddon PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(NeuralPassAddon PRIVATE /W4 /permissive-)
     if(EXISTS "${ONNXRUNTIME_ROOT}/include/onnxruntime_cxx_api.h")

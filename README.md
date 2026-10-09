@@ -31,7 +31,7 @@ test or release artifact; `[~]` means the production path is still incomplete.
 
 The generic path uses framebuffer color confidence. The core accepts depth,
 motion, mesh UV gradients, binding identity, and visibility classes. The
-experimental D3D10, D3D11, and D3D12 adapters supply exact rasterized mesh UVs and
+experimental D3D9, D3D10, D3D11, and D3D12 adapters supply exact rasterized mesh UVs and
 gradients; D3D12 now also samples a descriptor-tracked source texture when a
 compatible texture/sampler pair is bound. Its bounded-table RGBA8/BGRA8
 replacement path is experimental and still needs real-game validation. A new
@@ -233,8 +233,10 @@ first-observation evidence while the reveal-only atlas planner still schedules
 its uncovered UVs. Missing capture frames break the comparison chain rather
 than reprojecting across an unknown gap.
 
-D3D9 still requires an equivalent adapter. D3D10 has native Shader Model 4 draw
-replay, asynchronous readback, and isolated RGBA8/BGRA8 replacement under WARP.
+D3D9 has a separate Shader Model 3 token/reflection and legacy draw path. It
+captures direct/indexed UVs and replaces lockable 32-bit color textures, but its
+readback is synchronous and cannot provide depth. D3D10 has native Shader Model 4
+draw replay, asynchronous readback, and isolated RGBA8/BGRA8 replacement under WARP.
 D3D12 has experimental PSO replay,
 asynchronous capture, and descriptor-isolated RGBA8/BGRA8 replacement. Vulkan
 has SPIR-V vertex instrumentation, pipeline replay, and asynchronous readback, but
@@ -248,9 +250,9 @@ contract.
 
 | Graphics API | Geometry capture status |
 | --- | --- |
+| D3D9 | Experimental Shader Model 3 direct/indexed replay and lockable RGBA/BGRA replacement; native HAL test |
 | D3D10 | Experimental direct/indexed replay and RGBA8/BGRA8 replacement; automated WARP coverage |
 | D3D11 | Experimental draw replay and RGBA8/BGRA8 replacement; automated WARP coverage |
-| D3D9 | Adapter required |
 | D3D12 | Experimental direct/indirect PSO replay, readback, and bounded-table RGBA8/BGRA8 replacement; game validation pending |
 | Vulkan | Experimental SPIR-V UV/source capture, asynchronous readback, and bounded-table RGBA8/BGRA8 replacement; no hardware/game evidence yet |
 
@@ -269,8 +271,8 @@ backend without starting the game.
 
 ## Important limitations
 
-- Geometry-aware persistent baking is validated on D3D10/D3D11 WARP; D3D12 and
-  Vulkan adapters remain experimental and this is not a cross-API production release.
+- Geometry-aware persistent baking has native D3D9 and D3D10/D3D11 WARP tests;
+  D3D12 and Vulkan remain experimental and this is not a production release.
 - The D3D11 replay shader rejects fully transparent texels from its selected
   source texture, but cannot reproduce application-specific `discard`, custom
   alpha thresholds, or opacity sourced from another texture yet.
@@ -280,6 +282,8 @@ backend without starting the game.
   is restart-stable, while handle-derived bindings remain safely session-local.
 - D3D11 GPU replacement currently supports non-array RGBA8/BGRA8 Texture2D SRVs.
   Compressed, HDR/float, array, and multisampled sources retain screen-space output.
+- D3D9 capture requires four 32-bit floating-point MRTs, performs a synchronous
+  readback, cannot recover fragment depth, and replaces only lockable 32-bit textures.
 - v0.1 supports SDR RGBA8 capture. HDR/scRGB is not processed correctly yet.
 - DirectML model execution has an automated NVIDIA smoke test on the development
   machine; AMD and Intel execution still require hardware validation.
