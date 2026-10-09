@@ -51,7 +51,8 @@ Image<Color> resize_image(const Image<Color> &input, std::uint32_t width, std::u
 class OnnxBackend final : public InferenceBackend {
 public:
     OnnxBackend(const std::string &path, bool use_directml)
-        : env_(ORT_LOGGING_LEVEL_WARNING, "NeuralPass") {
+        : env_(ORT_LOGGING_LEVEL_WARNING, "NeuralPass"),
+          display_name_(use_directml ? "onnx/directml" : "onnx/cpu") {
         Ort::SessionOptions options;
         options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 #ifdef NEURALPASS_USE_DIRECTML
@@ -79,7 +80,7 @@ public:
         }
     }
 
-    std::string_view name() const noexcept override { return "onnx"; }
+    std::string_view name() const noexcept override { return display_name_; }
     bool ready() const noexcept override { return session_ != nullptr; }
 
     Image<Color> run(const Image<Color> &input) override {
@@ -121,6 +122,7 @@ public:
 
 private:
     Ort::Env env_;
+    std::string display_name_;
     std::unique_ptr<Ort::Session> session_;
     std::string input_name_;
     std::string output_name_;

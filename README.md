@@ -84,8 +84,16 @@ This is not a signed v1.0 release or a universal installer. Use it only with an
 offline game and a ReShade build with full add-on support. Do not inject it into
 anti-cheat or protected multiplayer software.
 
+For an assembled Windows package, run `Install NeuralPass.cmd` and give it the
+game executable or directory. It refuses known anti-cheat markers, checks for a
+graphics proxy, displays the unsigned-preview warning, and requires you to type
+`INSTALL` before copying anything. The package also includes manifest-scoped
+uninstallation and a diagnostics report generator.
+
+For a manual installation:
+
 1. Copy `NeuralPass.addon64` beside the game's ReShade DLL.
-2. Copy `shaders/NeuralPass.fx` into the game's `reshade-shaders/Shaders` folder.
+2. Copy `reshade-shaders/Shaders/NeuralPass.fx` into the corresponding game folder.
 3. Copy `models/downloads` beside the add-on, preserving that directory name.
 4. Choose a preset in the NeuralPass add-on overlay. `NEURALPASS_PRESET` can
    optionally set the launch default.
@@ -97,6 +105,12 @@ validity debug view to see which pixels currently have persistent styled data.
 
 The add-on intentionally drops capture frames when inference is behind. It
 never queues an unbounded amount of work or blocks the game waiting for a tile.
+In the DirectML build, D3D11 uses the DirectML execution provider; other graphics
+APIs use ONNX Runtime's CPU provider until their device-loss stress gates pass.
+The overlay reports `onnx/directml`, `onnx/cpu`, or `preview/...` so the active
+backend is never ambiguous.
+See [`docs/compatibility.md`](docs/compatibility.md) for the API support matrix,
+safety policy, diagnostics, and troubleshooting sequence.
 
 ## Prompt-driven live restyling
 
@@ -244,6 +258,8 @@ backend without starting the game.
 - D3D11 GPU replacement currently supports non-array RGBA8/BGRA8 Texture2D SRVs.
   Compressed, HDR/float, array, and multisampled sources retain screen-space output.
 - v0.1 supports SDR RGBA8 capture. HDR/scRGB is not processed correctly yet.
+- DirectML model execution has an automated NVIDIA smoke test on the development
+  machine; AMD and Intel execution still require hardware validation.
 - The screen-space fallback cannot follow large camera motion as accurately as
   engine motion vectors; changed pixels are invalidated and restyled instead.
 - Generic automatic HUD recognition is not yet reliable. A normalized manual

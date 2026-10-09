@@ -118,7 +118,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [ ] Replace the WSL filesystem bridge with NeuralPassWorker.exe.
 [ ] Add versioned named-pipe control and bounded shared-memory transport.
 [ ] Reject stale scene, style, binding, and request generations.
-[ ] Support ONNX Runtime DirectML on NVIDIA, AMD, and Intel.
+[~] Support ONNX Runtime DirectML on NVIDIA, AMD, and Intel.
+    Evidence: pinned Candy model executes through ONNX CPU and DirectML with finite,
+    dimension-correct output on NVIDIA RTX 5060 Ti; AMD and Intel hardware remain.
 [ ] Add optional CUDA acceleration.
 [!] Restore and verify the current StreamDiffusion environment.
     Blocker: the moved WSL environment is missing torch and onnxruntime packages.
@@ -142,16 +144,29 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 
 6. INSTALLER, SAFETY, AND DOCUMENTATION
 ---------------------------------------
-[ ] Build x86/x64 installer, updater, diagnostics, model manager, and uninstaller.
-[ ] Detect target API, ReShade support, GPU provider, HDR mode, and worker health.
-[ ] Require explicit per-game activation.
-[ ] Refuse known anti-cheat and protected multiplayer environments.
-[ ] Produce reproducible artifacts, checksums, SBOM, and provenance.
+[~] Build x86/x64 installer, updater, diagnostics, model manager, and uninstaller.
+    Evidence: manifest-scoped x64 preview installer/uninstaller and diagnostics pass
+    an isolated lifecycle test; x86, updater, and model-manager work remains.
+[~] Detect target API, ReShade support, GPU provider, HDR mode, and worker health.
+    Evidence: installer requires a graphics proxy and diagnostics report proxy files,
+    GPU/driver data, package hashes, safety markers, and ReShade logs; HDR and live
+    worker-health probes remain.
+[x] Require explicit per-game activation.
+    Evidence: the guided installer copies nothing until the user selects a game and
+    types the exact activation phrase; isolated install/uninstall lifecycle passes.
+[~] Refuse known anti-cheat and protected multiplayer environments.
+    Evidence: installer hard-refuses common Easy Anti-Cheat, BattlEye, Vanguard,
+    FACEIT, and ESEA markers; signed catalog/process-level detection remains.
+[~] Produce reproducible artifacts, checksums, SBOM, and provenance.
+    Evidence: clean assembly emits validated package metadata, third-party notices,
+    and exact SHA-256 file coverage; CI publishes the x64 DirectML artifact. SBOM
+    and bit-for-bit reproducibility remain.
 [!] Obtain public-trust Authenticode signing.
     Blocker: SignPath Foundation approval or Microsoft Artifact Signing identity setup.
 [~] Publish complete installation, troubleshooting, architecture, and compatibility docs.
-    Evidence: README and architecture document current preview install, scene/binding,
-    EWA, provenance, and limitations; installer troubleshooting/compatibility remain.
+    Evidence: README, packaged architecture, and compatibility guide cover guided/manual
+    installation, diagnostics, safety, API support, scene/binding behavior, provenance,
+    limitations, and troubleshooting; other API guidance evolves with their adapters.
 [ ] Publish signed GitHub releases and documentation site.
 
 7. ACCEPTANCE AND RELEASE
@@ -176,6 +191,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [ ] Steel Nomad D3D12 stress validation passes.
 [ ] Each API completes a 60-minute soak without crash or device removal.
 [ ] Clean-machine install, update, removal, and signature verification pass.
-[ ] GitHub Windows/Linux x86/x64 CI is green.
+[~] GitHub Windows/Linux x86/x64 CI is green.
+    Evidence: Linux validates the portable core; Windows builds the real x64 ReShade
+    DirectML add-on, executes the ONNX CPU/DirectML model smoke plus core and D3D11
+    WARP tests, validates packaging, and uploads it. x86 and other adapters remain.
 [ ] No open severity-1 or severity-2 defects.
 [ ] Signed v1.0 release published.

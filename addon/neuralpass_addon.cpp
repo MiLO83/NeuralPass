@@ -852,6 +852,7 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::atomic_int scene_command = static_cast<int>(ManualSceneCommand::none);
     std::atomic_uint64_t active_scene_identity = 0;
     std::atomic_uint64_t scene_generation = 1;
+    bool directml_enabled = false;
     std::atomic_uint64_t replacement_epoch = 1;
     std::uint64_t applied_replacement_epoch = 0;
     std::atomic_int scene_transition = static_cast<int>(neuralpass::SceneTransition::stable);
@@ -1184,15 +1185,16 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         for (std::size_t i = 0; i < k_presets.size(); ++i)
             if (preset_env == k_presets[i]) active_preset = static_cast<int>(i);
     state->requested_preset = active_preset;
-    auto load_backend = [](int preset_index) -> std::unique_ptr<neuralpass::InferenceBackend> {
+    auto load_backend = [state](int preset_index) -> std::unique_ptr<neuralpass::InferenceBackend> {
         const std::string preset = k_presets.at(static_cast<std::size_t>(preset_index));
         const auto model = g_addon_directory / "models" / "downloads" / (preset + "-9.onnx");
 #ifdef NEURALPASS_HAS_ONNXRUNTIME
         try {
             if (std::filesystem::exists(model))
-                // Keep inference off the game's D3D12 device. DirectML can reset
-                // exclusive-fullscreen workloads such as 3DMark Steel Nomad.
-                return neuralpass::make_onnx_backend(model.string(), false);
+                // DirectML is enabled for the validated D3D11 path. Other APIs use
+                // the CPU provider until their device-loss stress gates pass.
+                return neuralpass::make_onnx_backend(
+                    model.string(), state->directml_enabled);
         } catch (const std::exception &error) {
             reshade::log::message(reshade::log::level::error, error.what());
         }
@@ -1200,7 +1202,7 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         return neuralpass::make_preview_backend(preset);
     };
     backend = load_backend(active_preset);
-    if (backend->name() != "onnx") {
+    if (!backend->name().starts_with("onnx/")) {
         reshade::log::message(reshade::log::level::warning,
             "NeuralPass is using the preview backend. Download a model and build with ONNXRUNTIME_ROOT for neural output.");
     }
@@ -1557,6 +1559,8 @@ bool ensure_readback(reshade::api::effect_runtime *runtime, RuntimeState &state,
 
 void on_init(reshade::api::effect_runtime *runtime) {
     auto *state = runtime->create_private_data<RuntimeState>();
+    state->directml_enabled =
+        runtime->get_device()->get_api() == reshade::api::device_api::d3d11;
     std::copy_n(k_default_prompt, std::min(sizeof(k_default_prompt), state->prompt.size()),
                 state->prompt.data());
     const auto prompt_path = bridge_directory() / "prompt.txt";

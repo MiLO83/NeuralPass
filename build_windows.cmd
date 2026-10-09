@@ -26,7 +26,7 @@ echo ============================================================
 echo.
 
 call :find_tools || exit /b 1
-call :prepare_reshade || exit /b 1
+call :prepare_sdk || exit /b 1
 
 if /I "%NP_MODE%"=="directml" (
     call :prepare_directml || exit /b 1
@@ -60,6 +60,11 @@ if errorlevel 1 goto :failed
 
 echo [6/6] Assembling deployment folder...
 set "NP_DIST=%NP_ROOT%\dist\NeuralPass"
+if exist "%NP_DIST%" rmdir /S /Q "%NP_DIST%"
+if errorlevel 1 (
+    echo ERROR: Could not clean the deployment folder. Close programs using it and retry.
+    goto :failed
+)
 if not exist "%NP_DIST%" mkdir "%NP_DIST%"
 if not exist "%NP_DIST%\reshade-shaders\Shaders" mkdir "%NP_DIST%\reshade-shaders\Shaders"
 
@@ -69,6 +74,17 @@ if errorlevel 1 (
     goto :failed
 )
 copy /Y "%NP_ROOT%\shaders\NeuralPass.fx" "%NP_DIST%\reshade-shaders\Shaders\NeuralPass.fx" >nul
+copy /Y "%NP_ROOT%\README.md" "%NP_DIST%\README.md" >nul
+copy /Y "%NP_ROOT%\LICENSE" "%NP_DIST%\LICENSE.txt" >nul
+copy /Y "%NP_ROOT%\docs\architecture.md" "%NP_DIST%\ARCHITECTURE.md" >nul
+copy /Y "%NP_ROOT%\docs\compatibility.md" "%NP_DIST%\COMPATIBILITY.md" >nul
+copy /Y "%NP_ROOT%\THIRD_PARTY_NOTICES.md" "%NP_DIST%\THIRD_PARTY_NOTICES.md" >nul
+copy /Y "%NP_ROOT%\packaging\Install NeuralPass.cmd" "%NP_DIST%\Install NeuralPass.cmd" >nul
+copy /Y "%NP_ROOT%\packaging\Uninstall NeuralPass.cmd" "%NP_DIST%\Uninstall NeuralPass.cmd" >nul
+copy /Y "%NP_ROOT%\packaging\Diagnose NeuralPass.cmd" "%NP_DIST%\Diagnose NeuralPass.cmd" >nul
+copy /Y "%NP_ROOT%\packaging\Install-NeuralPass.ps1" "%NP_DIST%\Install-NeuralPass.ps1" >nul
+copy /Y "%NP_ROOT%\packaging\Uninstall-NeuralPass.ps1" "%NP_DIST%\Uninstall-NeuralPass.ps1" >nul
+copy /Y "%NP_ROOT%\packaging\Diagnose-NeuralPass.ps1" "%NP_DIST%\Diagnose-NeuralPass.ps1" >nul
 
 if /I "%NP_MODE%"=="directml" (
     copy /Y "%NP_ROOT%\external\onnxruntime\lib\onnxruntime.dll" "%NP_DIST%\onnxruntime.dll" >nul
@@ -76,7 +92,19 @@ if /I "%NP_MODE%"=="directml" (
     copy /Y "%NP_ROOT%\external\onnxruntime\lib\DirectML.dll" "%NP_DIST%\DirectML.dll" >nul
     if not exist "%NP_DIST%\models\downloads" mkdir "%NP_DIST%\models\downloads"
     copy /Y "%NP_ROOT%\models\downloads\*.onnx" "%NP_DIST%\models\downloads\" >nul
+    copy /Y "%NP_ROOT%\models\manifest.json" "%NP_DIST%\models\manifest.json" >nul
+    if not exist "%NP_DIST%\third-party" mkdir "%NP_DIST%\third-party"
+    copy /Y "%NP_ORT_PACKAGE%\LICENSE" "%NP_DIST%\third-party\ONNXRuntime-LICENSE.txt" >nul
+    copy /Y "%NP_ORT_PACKAGE%\ThirdPartyNotices.txt" "%NP_DIST%\third-party\ONNXRuntime-NOTICES.txt" >nul
+    copy /Y "%NP_DML_PACKAGE%\LICENSE.txt" "%NP_DIST%\third-party\DirectML-LICENSE.txt" >nul
+    copy /Y "%NP_DML_PACKAGE%\ThirdPartyNotices.txt" "%NP_DIST%\third-party\DirectML-NOTICES.txt" >nul
 )
+
+%NP_PY% "%NP_ROOT%\tools\write_package_metadata.py" ^
+  --package "%NP_DIST%" --mode "%NP_MODE%" --version "0.1.0-preview"
+if errorlevel 1 goto :failed
+%NP_PY% "%NP_ROOT%\tools\validate_package.py" "%NP_DIST%"
+if errorlevel 1 goto :failed
 
 echo.
 echo ============================================================
@@ -136,7 +164,7 @@ if not errorlevel 1 (
 echo       Tools ready.
 exit /b 0
 
-:prepare_reshade
+:prepare_sdk
 echo [2/6] Preparing ReShade 6.8.0 SDK...
 if not exist "%NP_ROOT%\external" mkdir "%NP_ROOT%\external"
 if not exist "%NP_ROOT%\external\reshade\include\reshade.hpp" (

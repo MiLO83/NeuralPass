@@ -67,6 +67,30 @@ if(NEURALPASS_BUILD_ADDON)
         target_link_libraries(NeuralPassAddon PRIVATE onnxruntime)
         target_compile_definitions(NeuralPassAddon PRIVATE
             NEURALPASS_HAS_ONNXRUNTIME NEURALPASS_USE_DIRECTML)
+        if(NEURALPASS_BUILD_TESTS)
+            add_executable(neuralpass_onnx_smoke_tests
+                src/inference_onnx.cpp
+                tests/onnx_smoke_tests.cpp)
+            target_include_directories(neuralpass_onnx_smoke_tests PRIVATE
+                include "${ONNXRUNTIME_ROOT}/include")
+            target_compile_features(neuralpass_onnx_smoke_tests PRIVATE cxx_std_20)
+            target_compile_definitions(neuralpass_onnx_smoke_tests PRIVATE
+                NEURALPASS_HAS_ONNXRUNTIME NEURALPASS_USE_DIRECTML
+                WIN32_LEAN_AND_MEAN NOMINMAX)
+            target_link_directories(neuralpass_onnx_smoke_tests PRIVATE
+                "${ONNXRUNTIME_ROOT}/lib")
+            target_link_libraries(neuralpass_onnx_smoke_tests PRIVATE
+                neuralpass_core onnxruntime)
+            add_custom_command(TARGET neuralpass_onnx_smoke_tests POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${ONNXRUNTIME_ROOT}/lib/onnxruntime.dll"
+                    "${ONNXRUNTIME_ROOT}/lib/onnxruntime_providers_shared.dll"
+                    "${ONNXRUNTIME_ROOT}/lib/DirectML.dll"
+                    "$<TARGET_FILE_DIR:neuralpass_onnx_smoke_tests>")
+            add_test(NAME neuralpass_onnx_directml
+                COMMAND neuralpass_onnx_smoke_tests
+                    "${CMAKE_SOURCE_DIR}/models/downloads/candy-9.onnx")
+        endif()
     else()
         message(WARNING "ONNXRUNTIME_ROOT not set: add-on will use the clearly-labelled preview backend")
     endif()

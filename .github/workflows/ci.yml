@@ -20,8 +20,22 @@ jobs:
       - name: Validate completion checklist
         run: python tools/validate_checklist.py
       - name: Configure
+        if: runner.os != 'Windows'
         run: cmake -S . -B build -DNEURALPASS_BUILD_ADDON=OFF
       - name: Build
+        if: runner.os != 'Windows'
         run: cmake --build build --config Release
       - name: Test
+        if: runner.os != 'Windows'
         run: ctest --test-dir build -C Release --output-on-failure
+      - name: Build and test Windows DirectML add-on
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: build_windows.cmd directml
+      - name: Upload Windows DirectML package
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: NeuralPass-windows-x64-directml
+          path: dist/NeuralPass
+          if-no-files-found: error
