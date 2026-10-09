@@ -988,6 +988,7 @@ void configure_explicit_draw_state(reshade::api::command_list *command_list,
             draw.source_space = best_source->dx_register_space;
             draw.sampler_register = best_sampler->dx_register_index;
             draw.sampler_space = best_sampler->dx_register_space;
+            draw.source_sampler = best_sampler->sampler.handle;
             draw.source_sampleable = true;
         }
         const auto bound_table = state.descriptor_tables.find(best_source->param);
@@ -2347,7 +2348,7 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
             : runtime->get_device()->get_api() == reshade::api::device_api::d3d12
                 ? "D3D12 UV-bearing draws use experimental PSO replay and bounded-table RGBA replacement; native render passes remain fallback-only."
             : runtime->get_device()->get_api() == reshade::api::device_api::vulkan
-                ? "Vulkan UV-bearing draws use experimental vertex-SPIR-V instrumentation and replay; replacement and native render passes remain fallback-only."
+                ? "Vulkan uses experimental vertex-SPIR-V replay and bounded-table RGBA replacement; native render passes remain fallback-only."
                 : "UV-bearing draws detected; this API still needs its replay adapter.");
     ImGui::SeparatorText("Scene identity");
     const auto transition = static_cast<neuralpass::SceneTransition>(

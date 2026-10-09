@@ -195,6 +195,15 @@ UV derivatives and rejects fully transparent texels. Separate image/sampler
 descriptors and descriptor arrays currently emit NaN source color and remain
 outside source-transfer baking.
 
+Replacement is deliberately narrower than capture. For a non-array RGBA8/BGRA8
+source created with transfer-source usage and held in a bounded descriptor table
+without dynamic offsets, the adapter clones the complete source image, uploads
+only covered atlas row runs, and clones the complete descriptor table before
+changing its selected image view. The shadow table is bound only for the
+application draw and the original is restored before capture replay. Images that
+cannot legally be copied, unbounded/array descriptors, and unsupported formats
+trip a per-material/source circuit breaker and retain screen-space output.
+
 The current transformer targets vertex-to-fragment pipelines. Tessellation,
 geometry, and mesh-shader pipelines stay on screen-space fallback because their
 final pre-raster stage must be instrumented instead of assuming a vertex output
@@ -206,7 +215,7 @@ with equal depth testing and writes disabled, then restores the application
 pipeline and render/depth attachments. Capture targets are explicitly transitioned
 into a three-slot buffer ring on ReShade's immediate command list; generic queue
 fences expose only completed slots without a normal-path CPU wait. Native
-render-pass draws, MSAA targets, general source-descriptor layouts, replacement descriptors,
+render-pass draws, MSAA targets, and general source/replacement descriptor layouts,
 device-loss recovery, SwiftShader coverage, and real-driver
 game evidence remain promotion gates. The checked-in SPIR-V is generated from
 `addon/shaders/vulkan_capture.frag`; a platform-neutral test instruments a real

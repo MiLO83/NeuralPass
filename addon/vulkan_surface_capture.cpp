@@ -69,6 +69,33 @@ struct PipelineKeyHash {
     }
 };
 
+struct ReplacementTexture {
+    std::vector<capture::ReplacementMip> mips;
+    reshade::api::resource source = {};
+    reshade::api::resource texture = {};
+    reshade::api::resource upload = {};
+    reshade::api::resource rejected_source = {};
+    reshade::api::resource_view view = {};
+    reshade::api::descriptor_table shadow_table = {};
+    reshade::api::descriptor_table shadow_source_table = {};
+    reshade::api::pipeline_layout shadow_layout = {};
+    std::uint32_t shadow_param = 0;
+    bool dirty = true;
+    bool ready = false;
+};
+
+bool byte_color_format(reshade::api::format format) {
+    return format == reshade::api::format::r8g8b8a8_unorm ||
+        format == reshade::api::format::r8g8b8a8_unorm_srgb ||
+        format == reshade::api::format::b8g8r8a8_unorm ||
+        format == reshade::api::format::b8g8r8a8_unorm_srgb;
+}
+
+bool bgra_format(reshade::api::format format) {
+    return format == reshade::api::format::b8g8r8a8_unorm ||
+        format == reshade::api::format::b8g8r8a8_unorm_srgb;
+}
+
 void store_shader(ShaderBlob &destination, const reshade::api::shader_desc &source) {
     if (source.code == nullptr || source.code_size == 0) return;
     const auto *bytes = static_cast<const std::uint8_t *>(source.code);
@@ -116,6 +143,7 @@ struct SurfaceCapture::Impl {
     reshade::api::command_queue *queue = nullptr;
     std::unordered_map<std::uint64_t, PipelineTemplate> pipelines;
     std::unordered_map<PipelineKey, reshade::api::pipeline, PipelineKeyHash> variants;
+    std::unordered_map<std::uint64_t, ReplacementTexture> replacements;
     std::array<reshade::api::resource, 4> targets {};
     std::array<reshade::api::resource_view, 4> views {};
     struct ReadbackSlot {
@@ -137,6 +165,25 @@ struct SurfaceCapture::Impl {
 
     ~Impl() { release_all(); }
 
+    void release_replacement(ReplacementTexture &entry) {
+        if (device != nullptr) {
+            if (entry.shadow_table != 0)
+                device->free_descriptor_table(entry.shadow_table);
+            if (entry.view != 0) device->destroy_resource_view(entry.view);
+            if (entry.upload != 0) device->destroy_resource(entry.upload);
+            if (entry.texture != 0) device->destroy_resource(entry.texture);
+        }
+        entry = {};
+    }
+
+    void release_replacements() {
+        for (auto &[material, entry] : replacements) {
+            (void)material;
+            release_replacement(entry);
+        }
+        replacements.clear();
+    }
+
     void release_surfaces() {
         if (device != nullptr) {
             for (auto &view : views) if (view != 0) device->destroy_resource_view(view);
@@ -157,6 +204,7 @@ struct SurfaceCapture::Impl {
                 (void)key; device->destroy_pipeline(pipeline);
             }
         variants.clear(); pipelines.clear();
+        release_replacements();
     }
 
     bool create_surfaces(std::uint32_t new_width, std::uint32_t new_height) {
@@ -338,6 +386,234 @@ struct SurfaceCapture::Impl {
         return result;
     }
 
+    reshade::api::descriptor_table replacement_table(
+        reshade::api::command_list *commands, std::uint64_t material,
+        const capture::DrawCommand &draw) {
+        const auto found = replacements.find(material);
+        if (found == replacements.end() || found->second.mips.empty() ||
+            device == nullptr || queue == nullptr || commands == nullptr ||
+            draw.source_resource == 0 || draw.source_view == 0 ||
+            !draw.source_descriptor_isolatable || draw.source_descriptor_table == 0 ||
+            draw.pipeline_layout == 0)
+            return {};
+        const auto descriptor_type =
+            static_cast<reshade::api::descriptor_type>(draw.source_descriptor_type);
+        if (descriptor_type != reshade::api::descriptor_type::shader_resource_view &&
+            descriptor_type != reshade::api::descriptor_type::sampler_with_resource_view)
+            return {};
+        if (descriptor_type == reshade::api::descriptor_type::sampler_with_resource_view &&
+            draw.source_sampler == 0)
+            return {};
+
+        auto &entry = found->second;
+        const reshade::api::resource source {draw.source_resource};
+        if (entry.rejected_source == source) return {};
+        const reshade::api::resource_view source_view {draw.source_view};
+        const auto desc = device->get_resource_desc(source);
+        const auto view_desc = device->get_resource_view_desc(source_view);
+        const bool valid = desc.type == reshade::api::resource_type::texture_2d &&
+            desc.texture.depth_or_layers == 1 && desc.texture.levels != 0 &&
+            desc.texture.samples == 1 &&
+            view_desc.type == reshade::api::resource_view_type::texture_2d &&
+            view_desc.texture.first_layer == 0 &&
+            view_desc.texture.first_level < desc.texture.levels &&
+            byte_color_format(view_desc.format) &&
+            (desc.usage & reshade::api::resource_usage::copy_source) !=
+                reshade::api::resource_usage::undefined;
+        auto reset_gpu = [&]() {
+            auto mips = std::move(entry.mips);
+            release_replacement(entry);
+            entry.mips = std::move(mips);
+        };
+        auto reject = [&]() -> reshade::api::descriptor_table {
+            entry.rejected_source = source;
+            entry.ready = false;
+            ++stats.rejected_replacements;
+            return {};
+        };
+        if (!valid) return reject();
+
+        if (entry.source != source) {
+            queue->wait_idle();
+            reset_gpu();
+            auto replacement_desc = desc;
+            replacement_desc.heap = reshade::api::memory_heap::default_;
+            replacement_desc.usage = reshade::api::resource_usage::shader_resource |
+                reshade::api::resource_usage::copy_dest;
+            replacement_desc.flags = reshade::api::resource_flags::none;
+            if (!device->create_resource(replacement_desc, nullptr,
+                    reshade::api::resource_usage::copy_dest, &entry.texture) ||
+                !device->create_resource_view(entry.texture,
+                    reshade::api::resource_usage::shader_resource,
+                    view_desc, &entry.view))
+                return reject();
+
+            std::uint64_t upload_size = 0;
+            for (std::uint32_t level = 0; level < desc.texture.levels; ++level) {
+                const auto mip_width = std::max(1u, desc.texture.width >> level);
+                const auto mip_height = std::max(1u, desc.texture.height >> level);
+                upload_size += static_cast<std::uint64_t>(mip_width) * mip_height * 4;
+            }
+            const reshade::api::resource_desc upload_desc(
+                upload_size, reshade::api::memory_heap::upload,
+                reshade::api::resource_usage::copy_source);
+            if (upload_size == 0 || !device->create_resource(upload_desc, nullptr,
+                    reshade::api::resource_usage::copy_source, &entry.upload))
+                return reject();
+            entry.source = source;
+            entry.dirty = true;
+            entry.ready = false;
+        }
+
+        if (entry.dirty) {
+            if (entry.ready) queue->wait_idle();
+            const auto old_usage =
+                static_cast<reshade::api::resource_usage>(draw.source_usage);
+            if ((old_usage & reshade::api::resource_usage::shader_resource) ==
+                reshade::api::resource_usage::undefined)
+                return reject();
+            if (entry.ready)
+                commands->barrier(entry.texture,
+                    reshade::api::resource_usage::shader_resource_pixel,
+                    reshade::api::resource_usage::copy_dest);
+            commands->barrier(source, old_usage,
+                              reshade::api::resource_usage::copy_source);
+            commands->copy_resource(source, entry.texture);
+            commands->barrier(source, reshade::api::resource_usage::copy_source,
+                              old_usage);
+
+            std::vector<std::uint64_t> mip_offsets(desc.texture.levels);
+            std::uint64_t upload_size = 0;
+            for (std::uint32_t level = 0; level < desc.texture.levels; ++level) {
+                mip_offsets[level] = upload_size;
+                upload_size += static_cast<std::uint64_t>(
+                    std::max(1u, desc.texture.width >> level)) *
+                    std::max(1u, desc.texture.height >> level) * 4;
+            }
+            void *mapped_data = nullptr;
+            if (!device->map_buffer_region(entry.upload, 0, upload_size,
+                    reshade::api::map_access::write_only, &mapped_data))
+                return reject();
+            auto *mapped = static_cast<std::uint8_t *>(mapped_data);
+            const bool bgra = bgra_format(view_desc.format);
+            const auto first_level = view_desc.texture.first_level;
+            const auto view_levels = view_desc.texture.levels == UINT32_MAX
+                ? desc.texture.levels - first_level : view_desc.texture.levels;
+            const auto levels = std::min<std::size_t>(
+                std::min<std::uint32_t>(view_levels, desc.texture.levels - first_level),
+                entry.mips.size());
+            for (std::size_t level = 0; level < levels; ++level) {
+                const auto &mip = entry.mips[level];
+                if (mip.width == 0 || mip.height == 0 ||
+                    mip.rgba.size() != static_cast<std::size_t>(mip.width) * mip.height * 4 ||
+                    mip.coverage.size() != static_cast<std::size_t>(mip.width) * mip.height)
+                    continue;
+                const auto subresource = first_level + static_cast<std::uint32_t>(level);
+                const auto mip_width = std::max(1u, desc.texture.width >> subresource);
+                const auto mip_height = std::max(1u, desc.texture.height >> subresource);
+                for (std::uint32_t y = 0; y < mip_height; ++y) {
+                    const auto ay = std::min(mip.height - 1, y * mip.height / mip_height);
+                    for (std::uint32_t x = 0; x < mip_width; ++x) {
+                        const auto ax = std::min(mip.width - 1, x * mip.width / mip_width);
+                        const auto *rgba = mip.rgba.data() +
+                            (static_cast<std::size_t>(ay) * mip.width + ax) * 4;
+                        auto *destination = mapped + mip_offsets[subresource] +
+                            (static_cast<std::uint64_t>(y) * mip_width + x) * 4;
+                        destination[0] = rgba[bgra ? 2 : 0];
+                        destination[1] = rgba[1];
+                        destination[2] = rgba[bgra ? 0 : 2];
+                        destination[3] = rgba[3];
+                    }
+                }
+            }
+            device->unmap_buffer_region(entry.upload);
+
+            for (std::size_t level = 0; level < levels; ++level) {
+                const auto &mip = entry.mips[level];
+                if (mip.width == 0 || mip.height == 0 ||
+                    mip.rgba.size() != static_cast<std::size_t>(mip.width) * mip.height * 4 ||
+                    mip.coverage.size() != static_cast<std::size_t>(mip.width) * mip.height)
+                    continue;
+                const auto subresource = first_level + static_cast<std::uint32_t>(level);
+                const auto mip_width = std::max(1u, desc.texture.width >> subresource);
+                const auto mip_height = std::max(1u, desc.texture.height >> subresource);
+                for (std::uint32_t y = 0; y < mip_height; ++y) {
+                    const auto ay = std::min(mip.height - 1, y * mip.height / mip_height);
+                    std::uint32_t x = 0;
+                    while (x < mip_width) {
+                        const auto ax = std::min(mip.width - 1, x * mip.width / mip_width);
+                        if (mip.coverage[static_cast<std::size_t>(ay) * mip.width + ax] == 0) {
+                            ++x;
+                            continue;
+                        }
+                        const auto begin = x++;
+                        while (x < mip_width) {
+                            const auto sample_x = std::min(
+                                mip.width - 1, x * mip.width / mip_width);
+                            if (mip.coverage[static_cast<std::size_t>(ay) * mip.width +
+                                             sample_x] == 0)
+                                break;
+                            ++x;
+                        }
+                        const reshade::api::subresource_box box {
+                            begin, y, 0, x, y + 1, 1};
+                        const auto source_offset = mip_offsets[subresource] +
+                            (static_cast<std::uint64_t>(y) * mip_width + begin) * 4;
+                        commands->copy_buffer_to_texture(entry.upload, source_offset,
+                            0, 0, entry.texture, subresource, &box);
+                    }
+                }
+            }
+            commands->barrier(entry.texture, reshade::api::resource_usage::copy_dest,
+                              reshade::api::resource_usage::shader_resource_pixel);
+            entry.dirty = false;
+            entry.ready = true;
+        }
+        if (!entry.ready) return {};
+
+        const reshade::api::pipeline_layout layout {draw.pipeline_layout};
+        const reshade::api::descriptor_table original {draw.source_descriptor_table};
+        bool refresh_shadow = entry.shadow_source_table != original;
+        if (entry.shadow_table == 0 || entry.shadow_layout != layout ||
+            entry.shadow_param != draw.source_descriptor_param) {
+            if (entry.shadow_table != 0)
+                device->free_descriptor_table(entry.shadow_table);
+            entry.shadow_table = {};
+            if (!device->allocate_descriptor_table(
+                    layout, draw.source_descriptor_param, &entry.shadow_table)) {
+                ++stats.rejected_replacements;
+                return {};
+            }
+            entry.shadow_layout = layout;
+            entry.shadow_param = draw.source_descriptor_param;
+            refresh_shadow = true;
+        }
+        if (!refresh_shadow) return entry.shadow_table;
+        std::array<reshade::api::descriptor_table_copy, 32> copies {};
+        for (std::uint32_t index = 0; index < draw.source_table_range_count; ++index) {
+            const auto &range = draw.source_table_ranges[index];
+            copies[index] = {original, range.binding, 0, entry.shadow_table,
+                             range.binding, 0, range.count};
+        }
+        device->copy_descriptor_tables(draw.source_table_range_count, copies.data());
+        reshade::api::descriptor_table_update update {};
+        update.table = entry.shadow_table;
+        update.binding = draw.source_descriptor_binding;
+        update.array_offset = draw.source_descriptor_array_offset;
+        update.count = 1;
+        update.type = descriptor_type;
+        reshade::api::sampler_with_resource_view combined {};
+        if (descriptor_type == reshade::api::descriptor_type::sampler_with_resource_view) {
+            combined = {reshade::api::sampler {draw.source_sampler}, entry.view};
+            update.descriptors = &combined;
+        } else {
+            update.descriptors = &entry.view;
+        }
+        device->update_descriptor_tables(1, &update);
+        entry.shadow_source_table = original;
+        return entry.shadow_table;
+    }
+
     bool execute(reshade::api::command_list *commands, const capture::DrawCommand &draw) {
         switch (draw.kind) {
         case capture::DrawKind::direct:
@@ -415,7 +691,7 @@ void SurfaceCapture::unregister_pipeline(reshade::api::pipeline pipeline) {
 capture::GraphicsBackend SurfaceCapture::backend() const noexcept { return capture::GraphicsBackend::vulkan; }
 capture::CaptureCapabilities SurfaceCapture::capabilities() const noexcept {
     return {.direct_draws=true, .indexed_draws=true, .indirect_draws=true,
-            .replacement_textures=false, .asynchronous_readback=true,
+            .replacement_textures=true, .asynchronous_readback=true,
             .shader_coverage_preserved=false};
 }
 bool SurfaceCapture::initialize(void *, std::uint32_t width, std::uint32_t height) {
@@ -443,7 +719,23 @@ bool SurfaceCapture::replay(void *command_list, const capture::UvInput &uv,
         commands->clear_render_target_view(impl_->views[3], missing);
         impl_->cleared = true;
     }
-    if (!impl_->execute(commands, draw)) return false;
+    const auto replacement = impl_->replacement_table(commands, material, draw);
+    const reshade::api::pipeline_layout layout {draw.pipeline_layout};
+    const reshade::api::descriptor_table original {draw.source_descriptor_table};
+    if (replacement != 0)
+        commands->bind_descriptor_table(reshade::api::shader_stage::pixel,
+            layout, draw.source_descriptor_param, replacement);
+    if (!impl_->execute(commands, draw)) {
+        if (replacement != 0)
+            commands->bind_descriptor_table(reshade::api::shader_stage::pixel,
+                layout, draw.source_descriptor_param, original);
+        return false;
+    }
+    if (replacement != 0) {
+        commands->bind_descriptor_table(reshade::api::shader_stage::pixel,
+            layout, draw.source_descriptor_param, original);
+        ++impl_->stats.replacement_draws;
+    }
     commands->bind_pipeline(reshade::api::pipeline_stage::all_graphics, companion);
     commands->bind_render_targets_and_depth_stencil(4, impl_->views.data(),
         reshade::api::resource_view {draw.depth_stencil_view});
@@ -510,7 +802,20 @@ std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(void *command_li
 capture::CaptureStatistics SurfaceCapture::statistics() const noexcept { if (!impl_) return {}; std::lock_guard lock(impl_->mutex); return impl_->stats; }
 std::uint32_t SurfaceCapture::width() const noexcept { if (!impl_) return 0; std::lock_guard lock(impl_->mutex); return impl_->width; }
 std::uint32_t SurfaceCapture::height() const noexcept { if (!impl_) return 0; std::lock_guard lock(impl_->mutex); return impl_->height; }
-void SurfaceCapture::queue_replacement(std::uint64_t, std::vector<capture::ReplacementMip>) {}
-void SurfaceCapture::clear_replacements() {}
+void SurfaceCapture::queue_replacement(
+    std::uint64_t material, std::vector<capture::ReplacementMip> mips) {
+    if (impl_ == nullptr || material == 0 || mips.empty()) return;
+    std::lock_guard lock(impl_->mutex);
+    auto &entry = impl_->replacements[material];
+    entry.mips = std::move(mips);
+    entry.dirty = true;
+    entry.rejected_source = {};
+}
+void SurfaceCapture::clear_replacements() {
+    if (impl_ == nullptr) return;
+    std::lock_guard lock(impl_->mutex);
+    if (impl_->queue != nullptr) impl_->queue->wait_idle();
+    impl_->release_replacements();
+}
 
 } // namespace neuralpass::vulkan_capture
