@@ -30,6 +30,12 @@ struct SurfaceCorrespondence {
     float du_dy = std::numeric_limits<float>::quiet_NaN();
     float dv_dx = std::numeric_limits<float>::quiet_NaN();
     float dv_dy = std::numeric_limits<float>::quiet_NaN();
+    // Optional base/source texture sample at this UV. It enables removal of
+    // framebuffer lighting before a styled observation enters the atlas.
+    float source_r = std::numeric_limits<float>::quiet_NaN();
+    float source_g = std::numeric_limits<float>::quiet_NaN();
+    float source_b = std::numeric_limits<float>::quiet_NaN();
+    float source_a = std::numeric_limits<float>::quiet_NaN();
 };
 
 struct TextureBakeSettings {
@@ -43,7 +49,19 @@ struct TextureBakeSettings {
     float depth_absolute_threshold = 0.002f;
     float depth_relative_threshold = 0.02f;
     std::uint32_t maximum_splat_radius = 16;
+    float minimum_transfer_ratio = 0.125f;
+    float maximum_transfer_ratio = 8.0f;
+    float transfer_epsilon = 1.0e-4f;
 };
+
+[[nodiscard]] bool has_source_texture_sample(const SurfaceCorrespondence &sample) noexcept;
+// Converts a styled shaded pixel into an approximate replacement texture texel
+// by applying its bounded linear-light ratio to the original source texel.
+[[nodiscard]] Color transfer_to_source_texture(
+    const Color &live_framebuffer,
+    const Color &styled_framebuffer,
+    const Color &source_texel,
+    const TextureBakeSettings &settings = {});
 
 enum class TextureSampleKind : std::uint8_t {
     generated_inpaint,
@@ -131,6 +149,7 @@ struct MaterialTextureBakePlan {
     // Inference output alpha is not authoritative. Keep the live framebuffer
     // alpha alongside the request so generated texels cannot alter cutouts.
     Image<float> source_alpha;
+    Image<Color> live_frame;
     std::uint64_t epoch = 0;
     std::size_t known_pixels = 0;
     std::size_t revealed_pixels = 0;

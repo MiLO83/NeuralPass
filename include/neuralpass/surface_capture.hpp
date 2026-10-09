@@ -25,6 +25,10 @@ struct SurfaceCapturePixel {
     float du_dy = std::numeric_limits<float>::quiet_NaN();
     float dv_dx = std::numeric_limits<float>::quiet_NaN();
     float dv_dy = std::numeric_limits<float>::quiet_NaN();
+    float source_r = std::numeric_limits<float>::quiet_NaN();
+    float source_g = std::numeric_limits<float>::quiet_NaN();
+    float source_b = std::numeric_limits<float>::quiet_NaN();
+    float source_a = std::numeric_limits<float>::quiet_NaN();
 };
 
 class SurfaceCaptureFrame {

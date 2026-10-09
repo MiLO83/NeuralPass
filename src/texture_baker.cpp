@@ -45,7 +45,46 @@ bool valid_observation(const SurfaceCorrespondence &sample,
     return true;
 }
 
+float srgb_to_linear(float value) {
+    value = std::clamp(value, 0.0f, 1.0f);
+    return value <= 0.04045f ? value / 12.92f
+                             : std::pow((value + 0.055f) / 1.055f, 2.4f);
+}
+
+float linear_to_srgb(float value) {
+    value = std::max(0.0f, value);
+    return value <= 0.0031308f ? value * 12.92f
+        : 1.055f * std::pow(value, 1.0f / 2.4f) - 0.055f;
+}
+
 } // namespace
+
+bool has_source_texture_sample(const SurfaceCorrespondence &sample) noexcept {
+    return std::isfinite(sample.source_r) && std::isfinite(sample.source_g) &&
+        std::isfinite(sample.source_b) && std::isfinite(sample.source_a);
+}
+
+Color transfer_to_source_texture(
+    const Color &live_framebuffer,
+    const Color &styled_framebuffer,
+    const Color &source_texel,
+    const TextureBakeSettings &settings) {
+    const float minimum = std::max(0.0f, settings.minimum_transfer_ratio);
+    const float maximum = std::max(minimum, settings.maximum_transfer_ratio);
+    const float epsilon = std::max(settings.transfer_epsilon,
+                                   std::numeric_limits<float>::epsilon());
+    const auto channel = [&](float live, float styled, float source) {
+        const float ratio = std::clamp(
+            (srgb_to_linear(styled) + epsilon) /
+                (srgb_to_linear(live) + epsilon),
+            minimum, maximum);
+        return std::clamp(linear_to_srgb(srgb_to_linear(source) * ratio), 0.0f, 1.0f);
+    };
+    return {channel(live_framebuffer.r, styled_framebuffer.r, source_texel.r),
+            channel(live_framebuffer.g, styled_framebuffer.g, source_texel.g),
+            channel(live_framebuffer.b, styled_framebuffer.b, source_texel.b),
+            std::clamp(source_texel.a, 0.0f, 1.0f)};
+}
 
 MaterialTextureAtlas::MaterialTextureAtlas(std::uint64_t material_id,
                                            std::uint32_t width, std::uint32_t height)
@@ -345,6 +384,7 @@ MaterialTextureBakePlan MaterialTextureBaker::plan(
     result.composite = live_frame;
     result.reveal_mask = Image<std::uint8_t>(live_frame.width(), live_frame.height(), 0);
     result.source_alpha = Image<float>(live_frame.width(), live_frame.height(), 1.0f);
+    result.live_frame = live_frame;
     for (std::size_t index = 0; index < live_frame.size(); ++index)
         result.source_alpha.pixels()[index] = live_frame.pixels()[index].a;
     result.epoch = epoch_;
@@ -375,7 +415,9 @@ MaterialTextureBakeStats MaterialTextureBaker::commit(
     if (plan.epoch != epoch_ || plan.reveal_mask.width() != inpainted_frame.width() ||
         plan.reveal_mask.height() != inpainted_frame.height() ||
         plan.source_alpha.width() != inpainted_frame.width() ||
-        plan.source_alpha.height() != inpainted_frame.height()) {
+        plan.source_alpha.height() != inpainted_frame.height() ||
+        plan.live_frame.width() != inpainted_frame.width() ||
+        plan.live_frame.height() != inpainted_frame.height()) {
         stats.stale = true;
         return stats;
     }
@@ -388,7 +430,14 @@ MaterialTextureBakeStats MaterialTextureBaker::commit(
         auto [entry, inserted] = atlases_.try_emplace(
             sample.material_id, sample.material_id, settings_.atlas_width, settings_.atlas_height);
         auto generated = inpainted_frame.at(sample.screen_x, sample.screen_y);
-        generated.a = plan.source_alpha.at(sample.screen_x, sample.screen_y);
+        if (has_source_texture_sample(sample)) {
+            generated = transfer_to_source_texture(
+                plan.live_frame.at(sample.screen_x, sample.screen_y), generated,
+                {sample.source_r, sample.source_g, sample.source_b, sample.source_a},
+                settings_.texture);
+        } else {
+            generated.a = plan.source_alpha.at(sample.screen_x, sample.screen_y);
+        }
         if (entry->second.observe(generated, sample, settings_.texture,
                                   TextureSampleKind::generated_inpaint)) {
             ++stats.accepted;

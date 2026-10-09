@@ -56,12 +56,16 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     Evidence: MaterialTextureBaker::plan and core reveal tests.
 [x] Never generate atlas texels that have no visible screen correspondence.
     Evidence: commit accepts only reveal-mask correspondences.
-[ ] Convert styled framebuffer appearance into a linear source-texture transfer.
+[~] Convert styled framebuffer appearance into a linear source-texture transfer.
+    Evidence: bounded linear-light ratio transfer is integrated into bake commit with
+    source-alpha tests; graphics adapters still need base-texture sample capture.
 [x] Implement confidence-weighted elliptical UV splatting.
     Evidence: bounded anisotropic-footprint and confidence-accumulation core test;
     D3D11 WARP verifies captured screen-space UV derivatives.
 [ ] Isolate UV islands, overlapping layers, bindings, and materials.
-[ ] Preserve source alpha and original pixels outside style coverage.
+[~] Preserve source alpha and original pixels outside style coverage.
+    Evidence: source-aware transfer preserves texture alpha and framebuffer reconstruction
+    retains fallback outside coverage; GPU replacement assembly remains.
 [x] Track unseen-original, direct-observation, and newly-visible-inpaint coverage.
     Evidence: explicit atlas coverage states, provenance commit test, and cache format test.
 [x] Let later direct observations supersede inpainted texels.

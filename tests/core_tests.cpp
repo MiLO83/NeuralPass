@@ -297,6 +297,40 @@ static void test_mips_do_not_expand_texture_coverage() {
             "coarse mip leaked style across an unseen texture footprint");
 }
 
+static void test_linear_source_texture_transfer_and_alpha() {
+    TextureBakeSettings settings;
+    const Color source {0.2f, 0.4f, 0.6f, 0.25f};
+    const auto neutral = transfer_to_source_texture(
+        {0.5f, 0.5f, 0.5f, 1.0f}, {0.5f, 0.5f, 0.5f, 0.1f}, source, settings);
+    require(std::abs(neutral.r - source.r) < 0.001f &&
+            std::abs(neutral.g - source.g) < 0.001f &&
+            std::abs(neutral.b - source.b) < 0.001f && neutral.a == source.a,
+            "neutral framebuffer transfer changed the source texture");
+    const auto styled = transfer_to_source_texture(
+        {0.5f, 0.5f, 0.5f, 1.0f}, {0.8f, 0.5f, 0.2f, 1.0f}, source, settings);
+    require(styled.r > source.r && std::abs(styled.g - source.g) < 0.001f &&
+            styled.b < source.b && styled.a == source.a,
+            "linear framebuffer transfer did not apply bounded style ratios");
+
+    MaterialTextureBaker baker({.atlas_width=16, .atlas_height=8});
+    Image<Color> live(1, 1, {0.5f, 0.5f, 0.5f, 0.9f});
+    Image<Color> generated(1, 1, {0.8f, 0.5f, 0.2f, 1.0f});
+    SurfaceCorrespondence sample {0, 0, 13, 0.5f, 0.5f, 1.0f};
+    sample.source_r = source.r;
+    sample.source_g = source.g;
+    sample.source_b = source.b;
+    sample.source_a = source.a;
+    require(has_source_texture_sample(sample),
+            "complete source texture sample was not recognized");
+    const auto plan = baker.plan(live, std::span(&sample, 1));
+    require(baker.commit(plan, generated, std::span(&sample, 1)).accepted == 1,
+            "source-aware generated texel was not committed");
+    const auto baked = baker.find(13)->sample(0.5f, 0.5f);
+    require(baked.r > source.r && baked.b < source.b &&
+            std::abs(baked.a - source.a) < 0.001f,
+            "baker stored shaded framebuffer color instead of source-texture transfer");
+}
+
 static void test_material_baker_handles_sparse_multiple_materials() {
     Image<Color> restyled(4, 1);
     restyled.at(0, 0) = {1.0f, 0.0f, 0.0f, 1.0f};
@@ -666,6 +700,7 @@ int main() {
         test_texture_baker_locks_observed_texels_and_rejects_bad_depth();
         test_elliptical_uv_splat_uses_gradients_and_confidence();
         test_mips_do_not_expand_texture_coverage();
+        test_linear_source_texture_transfer_and_alpha();
         test_material_baker_handles_sparse_multiple_materials();
         test_uncovered_atlas_never_reconstructs_debug_sentinel();
         test_partial_atlas_sampling_ignores_unseen_neighbors();
