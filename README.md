@@ -1,5 +1,8 @@
 # NeuralPass
 
+Created by Miles Cameron Johnston with OpenAI Codex — powered by the recurring
+instruction, “please continue.”
+
 [![CI](https://github.com/MiLO83/NeuralPass/actions/workflows/ci.yml/badge.svg)](https://github.com/MiLO83/NeuralPass/actions/workflows/ci.yml)
 
 NeuralPass is a persistent sparse neural post-process for ReShade. It keeps a
@@ -30,8 +33,8 @@ The generic path uses framebuffer color confidence. The core accepts depth,
 motion, mesh UV gradients, binding identity, and visibility classes. The
 experimental D3D11 and D3D12 adapters supply exact rasterized mesh UVs and
 gradients; D3D12 now also samples a descriptor-tracked source texture when a
-compatible texture/sampler pair is bound. It still has no replacement path or
-real-game validation.
+compatible texture/sampler pair is bound. Its bounded-table RGBA8/BGRA8
+replacement path is experimental and still needs real-game validation.
 
 ## Build
 
@@ -225,8 +228,8 @@ its uncovered UVs. Missing capture frames break the comparison chain rather
 than reprojecting across an unknown gap.
 
 D3D9/10 and Vulkan still require equivalent adapters. D3D12 has experimental
-PSO replay and asynchronous capture, but descriptor-isolated replacement,
-render-pass replay, device-loss stress, and real-game evidence remain. Unsupported APIs, shader
+PSO replay, asynchronous capture, and descriptor-isolated RGBA8/BGRA8 replacement,
+but render-pass replay, device-loss stress, and real-game evidence remain. Unsupported APIs, shader
 signatures, deferred contexts, render-target sizes, and MSAA draws retain the
 screen-space path instead of receiving guessed UV data. The canonical capture
 and multi-material baker remain API-neutral so every adapter emits the same
@@ -236,7 +239,7 @@ validated surface-frame contract.
 | --- | --- |
 | D3D11 | Experimental draw replay and RGBA8/BGRA8 replacement; automated WARP coverage |
 | D3D9 / D3D10 | Adapter required |
-| D3D12 | Experimental direct/indirect PSO replay and readback; replacement and game validation pending |
+| D3D12 | Experimental direct/indirect PSO replay, readback, and bounded-table RGBA8/BGRA8 replacement; game validation pending |
 | Vulkan | Adapter required |
 
 Atlas snapshots use a versioned, checksummed `.npatlas` format. Writes create a

@@ -84,6 +84,7 @@ std::unordered_map<std::uint64_t, PipelineCaptureInfo> g_pipeline_capture_info;
 std::unordered_map<std::uint64_t, neuralpass::capture::UvInput> g_vertex_uv_outputs;
 std::unordered_map<std::uint64_t, std::uint64_t> g_pipeline_fingerprints;
 std::unordered_map<std::uint64_t, ResourceFingerprint> g_resource_fingerprints;
+std::unordered_map<std::uint64_t, reshade::api::resource_usage> g_resource_states;
 std::unordered_set<std::uint64_t> g_vertex_buffers_probed;
 std::atomic_uint64_t g_pipelines_seen = 0;
 std::atomic_uint64_t g_uv_pipelines_seen = 0;
@@ -145,12 +146,22 @@ struct BakerPixelResource {
     reshade::api::resource_view view = {};
     std::uint32_t dx_register_index = 0;
     std::uint32_t dx_register_space = 0;
+    reshade::api::descriptor_table table = {};
+    std::uint32_t param = 0;
+    std::uint32_t binding = 0;
+    std::uint32_t array_offset = 0;
+    reshade::api::descriptor_type type = reshade::api::descriptor_type::shader_resource_view;
 };
 
 struct BakerPixelSampler {
     reshade::api::sampler sampler = {};
     std::uint32_t dx_register_index = 0;
     std::uint32_t dx_register_space = 0;
+};
+
+struct BakerDescriptorTable {
+    reshade::api::descriptor_table table = {};
+    bool has_dynamic_offsets = false;
 };
 
 struct __declspec(uuid("69062FC3-7159-466E-A9B2-4E505542414B")) BakerCommandState {
@@ -170,6 +181,7 @@ struct __declspec(uuid("69062FC3-7159-466E-A9B2-4E505542414B")) BakerCommandStat
     bool inside_render_pass = false;
     std::unordered_map<std::uint64_t, BakerPixelResource> pixel_resources;
     std::unordered_map<std::uint64_t, BakerPixelSampler> pixel_samplers;
+    std::unordered_map<std::uint32_t, BakerDescriptorTable> descriptor_tables;
 };
 constexpr std::array<const char *, 5> k_presets {
     "candy", "mosaic", "rain-princess", "udnie", "photo-detail"
@@ -348,7 +360,8 @@ std::uint64_t resource_descriptor_fingerprint(const reshade::api::resource_desc 
 
 void on_baker_init_resource(reshade::api::device *, const reshade::api::resource_desc &desc,
                             const reshade::api::subresource_data *initial_data,
-                            reshade::api::resource_usage, reshade::api::resource resource) {
+                            reshade::api::resource_usage initial_state,
+                            reshade::api::resource resource) {
     if (desc.type != reshade::api::resource_type::buffer &&
         desc.type != reshade::api::resource_type::texture_1d &&
         desc.type != reshade::api::resource_type::texture_2d &&
@@ -371,6 +384,18 @@ void on_baker_init_resource(reshade::api::device *, const reshade::api::resource
     }
     std::lock_guard lock(g_baker_probe_mutex);
     g_resource_fingerprints[resource.handle] = fingerprint;
+    g_resource_states[resource.handle] = initial_state;
+}
+
+void on_baker_barrier(reshade::api::command_list *, std::uint32_t count,
+                      const reshade::api::resource *resources,
+                      const reshade::api::resource_usage *,
+                      const reshade::api::resource_usage *new_states) {
+    if (resources == nullptr || new_states == nullptr) return;
+    std::lock_guard lock(g_baker_probe_mutex);
+    for (std::uint32_t index = 0; index < count; ++index)
+        if (resources[index] != 0)
+            g_resource_states[resources[index].handle] = new_states[index];
 }
 
 bool on_baker_update_buffer(reshade::api::device *device, const void *,
@@ -417,6 +442,7 @@ bool on_baker_update_texture(reshade::api::device *device,
 void on_baker_destroy_resource(reshade::api::device *, reshade::api::resource resource) {
     std::lock_guard lock(g_baker_probe_mutex);
     g_resource_fingerprints.erase(resource.handle);
+    g_resource_states.erase(resource.handle);
 }
 
 void on_baker_destroy_pipeline(reshade::api::device *device, reshade::api::pipeline pipeline) {
@@ -471,6 +497,7 @@ void on_baker_bind_pipeline(reshade::api::command_list *command_list,
             state->layout = info.layout;
             state->pixel_resources.clear();
             state->pixel_samplers.clear();
+            state->descriptor_tables.clear();
         }
     }
 }
@@ -489,9 +516,16 @@ std::uint64_t descriptor_slot(reshade::api::pipeline_layout layout,
 void track_pixel_descriptor(BakerCommandState &state, std::uint64_t slot,
                             reshade::api::resource_view view,
                             std::uint32_t dx_register_index = 0,
-                            std::uint32_t dx_register_space = 0) {
+                            std::uint32_t dx_register_space = 0,
+                            reshade::api::descriptor_table table = {},
+                            std::uint32_t param = 0,
+                            std::uint32_t binding = 0,
+                            std::uint32_t array_offset = 0,
+                            reshade::api::descriptor_type type =
+                                reshade::api::descriptor_type::shader_resource_view) {
     if (view == 0) state.pixel_resources.erase(slot);
-    else state.pixel_resources[slot] = {view, dx_register_index, dx_register_space};
+    else state.pixel_resources[slot] = {view, dx_register_index, dx_register_space,
+        table, param, binding, array_offset, type};
 }
 
 void track_pixel_sampler(BakerCommandState &state, std::uint64_t slot,
@@ -510,6 +544,7 @@ void on_baker_push_descriptors(reshade::api::command_list *command_list,
     auto *state = command_list->get_private_data<BakerCommandState>();
     if (!state || (state->layout != 0 && state->layout != layout)) return;
     state->layout = layout;
+    state->descriptor_tables.erase(param);
     for (std::uint32_t index = 0; index < update.count; ++index) {
         reshade::api::resource_view view = {};
         if (update.type == reshade::api::descriptor_type::shader_resource_view)
@@ -540,7 +575,8 @@ void on_baker_bind_descriptor_tables(reshade::api::command_list *command_list,
                                      reshade::api::shader_stage stages,
                                      reshade::api::pipeline_layout layout, std::uint32_t first,
                                      std::uint32_t count, const reshade::api::descriptor_table *tables,
-                                     std::uint32_t, const std::uint32_t *) {
+                                     std::uint32_t dynamic_offset_count,
+                                     const std::uint32_t *) {
     if ((stages & reshade::api::shader_stage::pixel) != reshade::api::shader_stage::pixel) return;
     auto *state = command_list->get_private_data<BakerCommandState>();
     auto *tracking = command_list->get_device()->get_private_data<descriptor_tracking>();
@@ -548,6 +584,8 @@ void on_baker_bind_descriptor_tables(reshade::api::command_list *command_list,
     state->layout = layout;
     try {
         for (std::uint32_t table_index = 0; table_index < count; ++table_index) {
+            state->descriptor_tables[first + table_index] = {
+                tables[table_index], dynamic_offset_count != 0};
             const auto param = tracking->get_pipeline_layout_param(layout, first + table_index);
             if (param.type != reshade::api::pipeline_layout_param_type::descriptor_table) continue;
             for (std::uint32_t range_index = 0; range_index < param.descriptor_table.count; ++range_index) {
@@ -566,7 +604,9 @@ void on_baker_bind_descriptor_tables(reshade::api::command_list *command_list,
                         range.type == reshade::api::descriptor_type::sampler_with_resource_view)
                         track_pixel_descriptor(*state, slot,
                             tracking->get_resource_view(heap, base_offset + element),
-                            range.dx_register_index + element, range.dx_register_space);
+                            range.dx_register_index + element, range.dx_register_space,
+                            tables[table_index], first + table_index,
+                            range.binding + element, 0, range.type);
                     if (range.type == reshade::api::descriptor_type::sampler ||
                         range.type == reshade::api::descriptor_type::sampler_with_resource_view)
                         track_pixel_sampler(*state, slot,
@@ -856,6 +896,7 @@ void configure_d3d12_draw_state(reshade::api::command_list *command_list,
     draw.render_target_count = state.render_target_count;
     draw.depth_stencil_view = state.depth_stencil.handle;
     draw.inside_render_pass = state.inside_render_pass;
+    draw.api_command_list = command_list;
     for (std::uint32_t index = 0; index < state.render_target_count; ++index)
         draw.render_target_views[index] = state.render_targets[index].handle;
 
@@ -887,6 +928,16 @@ void configure_d3d12_draw_state(reshade::api::command_list *command_list,
         }
     }
     if (best_source != nullptr) {
+        const auto source_resource = command_list->get_device()->get_resource_from_view(
+            best_source->view);
+        draw.source_view = best_source->view.handle;
+        draw.source_resource = source_resource.handle;
+        {
+            std::lock_guard lock(g_baker_probe_mutex);
+            if (const auto known = g_resource_states.find(source_resource.handle);
+                known != g_resource_states.end())
+                draw.source_usage = static_cast<std::uint32_t>(known->second);
+        }
         const BakerPixelSampler *best_sampler = nullptr;
         for (const auto &[slot, sampler] : state.pixel_samplers) {
             (void)slot;
@@ -902,12 +953,43 @@ void configure_d3d12_draw_state(reshade::api::command_list *command_list,
             }
         }
         if (best_sampler != nullptr) {
-            draw.source_view = best_source->view.handle;
             draw.source_register = best_source->dx_register_index;
             draw.source_space = best_source->dx_register_space;
             draw.sampler_register = best_sampler->dx_register_index;
             draw.sampler_space = best_sampler->dx_register_space;
             draw.source_sampleable = true;
+        }
+        const auto bound_table = state.descriptor_tables.find(best_source->param);
+        auto *tracking = command_list->get_device()->get_private_data<descriptor_tracking>();
+        if (tracking != nullptr && best_source->table != 0 &&
+            bound_table != state.descriptor_tables.end() &&
+            bound_table->second.table == best_source->table &&
+            !bound_table->second.has_dynamic_offsets) {
+            try {
+                const auto param = tracking->get_pipeline_layout_param(
+                    state.layout, best_source->param);
+                if (param.type == reshade::api::pipeline_layout_param_type::descriptor_table &&
+                    param.descriptor_table.count <= draw.source_table_ranges.size()) {
+                    bool bounded = true;
+                    for (std::uint32_t index = 0; index < param.descriptor_table.count; ++index) {
+                        const auto &range = param.descriptor_table.ranges[index];
+                        if (range.count == UINT32_MAX) { bounded = false; break; }
+                        draw.source_table_ranges[index] = {range.binding, range.count};
+                    }
+                    if (bounded) {
+                        draw.source_descriptor_table = best_source->table.handle;
+                        draw.source_descriptor_param = best_source->param;
+                        draw.source_descriptor_binding = best_source->binding;
+                        draw.source_descriptor_array_offset = best_source->array_offset;
+                        draw.source_descriptor_type =
+                            static_cast<std::uint32_t>(best_source->type);
+                        draw.source_table_range_count = param.descriptor_table.count;
+                        draw.source_descriptor_isolatable = true;
+                    }
+                }
+            } catch (const std::out_of_range &) {
+                draw.source_descriptor_isolatable = false;
+            }
         }
     }
     if (!state.inside_render_pass && state.render_target_count != 0 &&
@@ -2284,6 +2366,7 @@ extern "C" __declspec(dllexport) bool AddonInit(HMODULE addon_module, HMODULE re
     reshade::register_event<reshade::addon_event::destroy_pipeline>(on_baker_destroy_pipeline);
     reshade::register_event<reshade::addon_event::init_resource>(on_baker_init_resource);
     reshade::register_event<reshade::addon_event::destroy_resource>(on_baker_destroy_resource);
+    reshade::register_event<reshade::addon_event::barrier>(on_baker_barrier);
     reshade::register_event<reshade::addon_event::update_buffer_region>(on_baker_update_buffer);
     reshade::register_event<reshade::addon_event::update_buffer_region_command>(on_baker_update_buffer_command);
     reshade::register_event<reshade::addon_event::update_texture_region>(on_baker_update_texture);

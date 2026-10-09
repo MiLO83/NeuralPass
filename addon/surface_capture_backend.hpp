@@ -37,6 +37,11 @@ struct UvInput {
     }
 };
 
+struct DescriptorRangeSnapshot {
+    std::uint32_t binding = 0;
+    std::uint32_t count = 0;
+};
+
 struct DrawCommand {
     DrawKind kind = DrawKind::direct;
     std::uint32_t vertex_or_index_count = 0;
@@ -66,6 +71,17 @@ struct DrawCommand {
     std::uint32_t sampler_register = 0;
     std::uint32_t sampler_space = 0;
     bool source_sampleable = false;
+    void *api_command_list = nullptr;
+    std::uint64_t source_resource = 0;
+    std::uint32_t source_usage = 0;
+    std::uint64_t source_descriptor_table = 0;
+    std::uint32_t source_descriptor_param = 0;
+    std::uint32_t source_descriptor_binding = 0;
+    std::uint32_t source_descriptor_array_offset = 0;
+    std::uint32_t source_descriptor_type = 0;
+    std::array<DescriptorRangeSnapshot, 32> source_table_ranges {};
+    std::uint32_t source_table_range_count = 0;
+    bool source_descriptor_isolatable = false;
 };
 
 struct ReplacementMip {

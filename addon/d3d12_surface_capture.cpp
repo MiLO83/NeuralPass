@@ -100,6 +100,20 @@ struct ReadbackSlot {
     std::uint64_t frame_index = 0;
 };
 
+struct ReplacementTexture {
+    std::vector<capture::ReplacementMip> mips;
+    ID3D12Resource *source = nullptr;
+    ID3D12Resource *texture = nullptr;
+    ID3D12Resource *upload = nullptr;
+    ID3D12Resource *rejected_source = nullptr;
+    reshade::api::resource_view view = {};
+    reshade::api::descriptor_table shadow_table = {};
+    reshade::api::pipeline_layout shadow_layout = {};
+    std::uint32_t shadow_param = 0;
+    bool dirty = true;
+    bool ready = false;
+};
+
 constexpr std::array<DXGI_FORMAT, 4> k_formats {
     DXGI_FORMAT_R32G32B32A32_UINT,
     DXGI_FORMAT_R32G32B32A32_FLOAT,
@@ -132,6 +146,18 @@ D3D12_RESOURCE_DESC texture_desc(std::uint32_t width, std::uint32_t height,
     return result;
 }
 
+bool byte_color_format(reshade::api::format format) {
+    return format == reshade::api::format::r8g8b8a8_unorm ||
+        format == reshade::api::format::r8g8b8a8_unorm_srgb ||
+        format == reshade::api::format::b8g8r8a8_unorm ||
+        format == reshade::api::format::b8g8r8a8_unorm_srgb;
+}
+
+bool bgra_format(reshade::api::format format) {
+    return format == reshade::api::format::b8g8r8a8_unorm ||
+        format == reshade::api::format::b8g8r8a8_unorm_srgb;
+}
+
 } // namespace
 
 struct SurfaceCapture::Impl {
@@ -149,7 +175,7 @@ struct SurfaceCapture::Impl {
     ID3D12Fence *fence = nullptr;
     std::unordered_map<std::uint64_t, PipelineTemplate> pipelines;
     std::unordered_map<PipelineKey, reshade::api::pipeline, PipelineKeyHash> variants;
-    std::unordered_map<std::uint64_t, std::vector<capture::ReplacementMip>> replacements;
+    std::unordered_map<std::uint64_t, ReplacementTexture> replacements;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     std::size_t next_readback = 0;
@@ -160,12 +186,35 @@ struct SurfaceCapture::Impl {
     bool cleared = false;
 
     ~Impl() {
+        if (api_queue != nullptr) api_queue->wait_idle();
         release_surfaces();
         release_pipelines();
+        release_replacements();
         release(draw_signature);
         release(draw_indexed_signature);
         release(native_queue);
         release(device);
+    }
+
+    void release_replacement(ReplacementTexture &entry) {
+        if (api_device != nullptr) {
+            if (entry.shadow_table != 0)
+                api_device->free_descriptor_table(entry.shadow_table);
+            if (entry.view != 0) api_device->destroy_resource_view(entry.view);
+        }
+        release(entry.upload);
+        release(entry.texture);
+        release(entry.source);
+        release(entry.rejected_source);
+        entry = {};
+    }
+
+    void release_replacements() {
+        for (auto &[material, entry] : replacements) {
+            (void)material;
+            release_replacement(entry);
+        }
+        replacements.clear();
     }
 
     void release_surfaces() {
@@ -379,6 +428,253 @@ struct SurfaceCapture::Impl {
         return result;
     }
 
+    reshade::api::descriptor_table replacement_table(
+        ID3D12GraphicsCommandList *commands, std::uint64_t material_id,
+        const capture::DrawCommand &draw) {
+        const auto found = replacements.find(material_id);
+        if (found == replacements.end() || found->second.mips.empty() ||
+            api_device == nullptr || draw.api_command_list == nullptr ||
+            draw.source_resource == 0 || draw.source_view == 0 ||
+            !draw.source_descriptor_isolatable || draw.source_descriptor_table == 0 ||
+            draw.pipeline_layout == 0 ||
+            static_cast<reshade::api::descriptor_type>(draw.source_descriptor_type) !=
+                reshade::api::descriptor_type::shader_resource_view)
+            return {};
+        auto &entry = found->second;
+        auto *source = reinterpret_cast<ID3D12Resource *>(draw.source_resource);
+        if (entry.rejected_source == source) return {};
+        const reshade::api::resource source_handle {draw.source_resource};
+        const reshade::api::resource_view source_view {draw.source_view};
+        const auto desc = api_device->get_resource_desc(source_handle);
+        const auto view_desc = api_device->get_resource_view_desc(source_view);
+        const auto native_desc = source->GetDesc();
+        const bool valid = desc.type == reshade::api::resource_type::texture_2d &&
+            desc.texture.depth_or_layers == 1 && desc.texture.samples == 1 &&
+            view_desc.type == reshade::api::resource_view_type::texture_2d &&
+            view_desc.texture.first_layer == 0 && byte_color_format(view_desc.format) &&
+            native_desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
+            native_desc.DepthOrArraySize == 1 && native_desc.SampleDesc.Count == 1;
+        if (!valid) {
+            release(entry.rejected_source);
+            entry.rejected_source = source;
+            source->AddRef();
+            ++statistics.rejected_replacements;
+            return {};
+        }
+
+        auto reject = [&]() -> reshade::api::descriptor_table {
+            if (api_device != nullptr) {
+                if (entry.shadow_table != 0)
+                    api_device->free_descriptor_table(entry.shadow_table);
+                if (entry.view != 0) api_device->destroy_resource_view(entry.view);
+            }
+            entry.shadow_table = {};
+            entry.view = {};
+            release(entry.upload);
+            release(entry.texture);
+            release(entry.source);
+            release(entry.rejected_source);
+            entry.rejected_source = source;
+            source->AddRef();
+            entry.ready = false;
+            ++statistics.rejected_replacements;
+            return {};
+        };
+
+        if (entry.source != source) {
+            if (api_queue != nullptr) api_queue->wait_idle();
+            if (entry.shadow_table != 0)
+                api_device->free_descriptor_table(entry.shadow_table);
+            if (entry.view != 0) api_device->destroy_resource_view(entry.view);
+            entry.shadow_table = {};
+            entry.view = {};
+            release(entry.upload);
+            release(entry.texture);
+            release(entry.source);
+            release(entry.rejected_source);
+
+            D3D12_HEAP_PROPERTIES default_heap {};
+            default_heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+            if (FAILED(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE,
+                    &native_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                    IID_PPV_ARGS(&entry.texture))))
+                return reject();
+            if (!api_device->create_resource_view(
+                    reshade::api::resource {
+                        reinterpret_cast<std::uint64_t>(entry.texture)},
+                    reshade::api::resource_usage::shader_resource, view_desc,
+                    &entry.view))
+                return reject();
+
+            std::uint64_t upload_size = 0;
+            device->GetCopyableFootprints(&native_desc, 0, native_desc.MipLevels, 0,
+                                          nullptr, nullptr, nullptr, &upload_size);
+            D3D12_HEAP_PROPERTIES upload_heap {};
+            upload_heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+            D3D12_RESOURCE_DESC upload_desc {};
+            upload_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+            upload_desc.Width = upload_size;
+            upload_desc.Height = 1;
+            upload_desc.DepthOrArraySize = 1;
+            upload_desc.MipLevels = 1;
+            upload_desc.SampleDesc.Count = 1;
+            upload_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            if (upload_size == 0 || FAILED(device->CreateCommittedResource(&upload_heap,
+                    D3D12_HEAP_FLAG_NONE, &upload_desc,
+                    D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                    IID_PPV_ARGS(&entry.upload))))
+                return reject();
+            entry.source = source;
+            source->AddRef();
+            entry.dirty = true;
+            entry.ready = false;
+        }
+
+        if (entry.dirty) {
+            const auto old_usage = static_cast<reshade::api::resource_usage>(draw.source_usage);
+            if ((old_usage & reshade::api::resource_usage::shader_resource) ==
+                    reshade::api::resource_usage::undefined)
+                return reject();
+            auto *api_commands = static_cast<reshade::api::command_list *>(
+                draw.api_command_list);
+            const reshade::api::resource replacement_handle {
+                reinterpret_cast<std::uint64_t>(entry.texture)};
+            if (entry.ready)
+                api_commands->barrier(replacement_handle,
+                                      reshade::api::resource_usage::shader_resource_pixel,
+                                      reshade::api::resource_usage::copy_dest);
+            api_commands->barrier(source_handle, old_usage,
+                                  reshade::api::resource_usage::copy_source);
+            commands->CopyResource(entry.texture, source);
+            api_commands->barrier(source_handle, reshade::api::resource_usage::copy_source,
+                                  old_usage);
+
+            std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints(
+                native_desc.MipLevels);
+            device->GetCopyableFootprints(&native_desc, 0, native_desc.MipLevels, 0,
+                                          footprints.data(), nullptr, nullptr, nullptr);
+            std::uint8_t *mapped = nullptr;
+            if (FAILED(entry.upload->Map(0, nullptr,
+                    reinterpret_cast<void **>(&mapped)))) {
+                entry.ready = false;
+                ++statistics.rejected_replacements;
+                return {};
+            }
+            const bool bgra = bgra_format(view_desc.format);
+            const auto first_level = view_desc.texture.first_level;
+            const auto view_levels = view_desc.texture.levels == UINT32_MAX
+                ? native_desc.MipLevels - first_level : view_desc.texture.levels;
+            const auto levels = std::min<std::size_t>(
+                std::min<std::uint32_t>(view_levels, native_desc.MipLevels - first_level),
+                entry.mips.size());
+            for (std::size_t level = 0; level < levels; ++level) {
+                const auto &mip = entry.mips[level];
+                if (mip.width == 0 || mip.height == 0 ||
+                    mip.rgba.size() != static_cast<std::size_t>(mip.width) * mip.height * 4 ||
+                    mip.coverage.size() != static_cast<std::size_t>(mip.width) * mip.height)
+                    continue;
+                const auto subresource = first_level + static_cast<std::uint32_t>(level);
+                const auto mip_width = std::max<UINT>(
+                    1, static_cast<UINT>(native_desc.Width) >> subresource);
+                const auto mip_height = std::max<UINT>(1, native_desc.Height >> subresource);
+                auto &footprint = footprints[subresource];
+                for (UINT y = 0; y < mip_height; ++y) {
+                    auto *row = mapped + footprint.Offset +
+                        static_cast<std::size_t>(y) * footprint.Footprint.RowPitch;
+                    const auto ay = std::min(mip.height - 1, y * mip.height / mip_height);
+                    for (UINT x = 0; x < mip_width; ++x) {
+                        const auto ax = std::min(mip.width - 1, x * mip.width / mip_width);
+                        const auto *rgba = mip.rgba.data() +
+                            (static_cast<std::size_t>(ay) * mip.width + ax) * 4;
+                        auto *destination = row + static_cast<std::size_t>(x) * 4;
+                        destination[0] = rgba[bgra ? 2 : 0];
+                        destination[1] = rgba[1];
+                        destination[2] = rgba[bgra ? 0 : 2];
+                        destination[3] = rgba[3];
+                    }
+                }
+            }
+            entry.upload->Unmap(0, nullptr);
+
+            for (std::size_t level = 0; level < levels; ++level) {
+                const auto &mip = entry.mips[level];
+                if (mip.width == 0 || mip.height == 0 ||
+                    mip.rgba.size() != static_cast<std::size_t>(mip.width) * mip.height * 4 ||
+                    mip.coverage.size() != static_cast<std::size_t>(mip.width) * mip.height)
+                    continue;
+                const auto subresource = first_level + static_cast<std::uint32_t>(level);
+                const auto mip_width = std::max<UINT>(
+                    1, static_cast<UINT>(native_desc.Width) >> subresource);
+                const auto mip_height = std::max<UINT>(1, native_desc.Height >> subresource);
+                D3D12_TEXTURE_COPY_LOCATION source_location {};
+                source_location.pResource = entry.upload;
+                source_location.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+                source_location.PlacedFootprint = footprints[subresource];
+                D3D12_TEXTURE_COPY_LOCATION destination_location {};
+                destination_location.pResource = entry.texture;
+                destination_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                destination_location.SubresourceIndex = subresource;
+                for (UINT y = 0; y < mip_height; ++y) {
+                    const auto ay = std::min(mip.height - 1, y * mip.height / mip_height);
+                    UINT x = 0;
+                    while (x < mip_width) {
+                        const auto ax = std::min(mip.width - 1, x * mip.width / mip_width);
+                        if (mip.coverage[static_cast<std::size_t>(ay) * mip.width + ax] == 0) {
+                            ++x;
+                            continue;
+                        }
+                        const auto begin = x++;
+                        while (x < mip_width) {
+                            const auto sample_x = std::min(mip.width - 1,
+                                x * mip.width / mip_width);
+                            if (mip.coverage[static_cast<std::size_t>(ay) * mip.width + sample_x] == 0)
+                                break;
+                            ++x;
+                        }
+                        const D3D12_BOX box {begin, y, 0, x, y + 1, 1};
+                        commands->CopyTextureRegion(&destination_location, begin, y, 0,
+                                                    &source_location, &box);
+                    }
+                }
+            }
+            api_commands->barrier(replacement_handle,
+                                  reshade::api::resource_usage::copy_dest,
+                                  reshade::api::resource_usage::shader_resource_pixel);
+            entry.dirty = false;
+            entry.ready = true;
+        }
+        if (!entry.ready) return {};
+
+        const reshade::api::pipeline_layout layout {draw.pipeline_layout};
+        if (entry.shadow_table == 0 || entry.shadow_layout != layout ||
+            entry.shadow_param != draw.source_descriptor_param) {
+            if (entry.shadow_table != 0)
+                api_device->free_descriptor_table(entry.shadow_table);
+            entry.shadow_table = {};
+            if (!api_device->allocate_descriptor_table(
+                    layout, draw.source_descriptor_param, &entry.shadow_table)) {
+                ++statistics.rejected_replacements;
+                return {};
+            }
+            entry.shadow_layout = layout;
+            entry.shadow_param = draw.source_descriptor_param;
+        }
+        const reshade::api::descriptor_table original {draw.source_descriptor_table};
+        std::array<reshade::api::descriptor_table_copy, 32> copies {};
+        for (std::uint32_t index = 0; index < draw.source_table_range_count; ++index) {
+            const auto &range = draw.source_table_ranges[index];
+            copies[index] = {original, range.binding, 0, entry.shadow_table,
+                             range.binding, 0, range.count};
+        }
+        api_device->copy_descriptor_tables(draw.source_table_range_count, copies.data());
+        const reshade::api::descriptor_table_update update {
+            entry.shadow_table, draw.source_descriptor_binding,
+            draw.source_descriptor_array_offset, 1,
+            reshade::api::descriptor_type::shader_resource_view, &entry.view};
+        api_device->update_descriptor_tables(1, &update);
+        return entry.shadow_table;
+    }
+
     bool create_signatures() {
         if (draw_signature != nullptr && draw_indexed_signature != nullptr) return true;
         D3D12_INDIRECT_ARGUMENT_DESC argument {};
@@ -577,7 +873,7 @@ capture::CaptureCapabilities SurfaceCapture::capabilities() const noexcept {
         .direct_draws = true,
         .indexed_draws = true,
         .indirect_draws = true,
-        .replacement_textures = false,
+        .replacement_textures = true,
         .asynchronous_readback = true,
         .shader_coverage_preserved = false,
     };
@@ -619,9 +915,30 @@ bool SurfaceCapture::replay(void *native_command_list, const capture::UvInput &u
     if (capture_pipeline == 0) return false;
     if (!impl_->cleared) impl_->clear(commands);
 
+    // Clone the complete bounded table and change only the selected SRV. The
+    // application-owned table is never mutated, and is rebound before capture.
+    const auto replacement_table = impl_->replacement_table(
+        commands, material_id, draw);
+    auto *api_commands = static_cast<reshade::api::command_list *>(draw.api_command_list);
+    const reshade::api::pipeline_layout layout {draw.pipeline_layout};
+    const reshade::api::descriptor_table original_table {draw.source_descriptor_table};
+    if (replacement_table != 0)
+        api_commands->bind_descriptor_table(reshade::api::shader_stage::pixel,
+            layout, draw.source_descriptor_param, replacement_table);
+
     // The application draw is issued once here; returning true suppresses the
     // corresponding ReShade wrapper call.
-    if (!impl_->execute(commands, draw)) return false;
+    if (!impl_->execute(commands, draw)) {
+        if (replacement_table != 0)
+            api_commands->bind_descriptor_table(reshade::api::shader_stage::pixel,
+                layout, draw.source_descriptor_param, original_table);
+        return false;
+    }
+    if (replacement_table != 0) {
+        api_commands->bind_descriptor_table(reshade::api::shader_stage::pixel,
+            layout, draw.source_descriptor_param, original_table);
+        ++impl_->statistics.replacement_draws;
+    }
     commands->SetPipelineState(reinterpret_cast<ID3D12PipelineState *>(capture_pipeline.handle));
     D3D12_CPU_DESCRIPTOR_HANDLE capture_depth {draw.depth_stencil_view};
     commands->OMSetRenderTargets(static_cast<UINT>(impl_->target_views.size()),
@@ -757,13 +1074,16 @@ void SurfaceCapture::queue_replacement(std::uint64_t material_id,
     if (impl_ != nullptr && material_id != 0 && !mips.empty())
     {
         std::lock_guard lock(impl_->mutex);
-        impl_->replacements.insert_or_assign(material_id, std::move(mips));
+        auto &entry = impl_->replacements[material_id];
+        entry.mips = std::move(mips);
+        entry.dirty = true;
     }
 }
 void SurfaceCapture::clear_replacements() {
     if (impl_ != nullptr) {
         std::lock_guard lock(impl_->mutex);
-        impl_->replacements.clear();
+        if (impl_->api_queue != nullptr) impl_->api_queue->wait_idle();
+        impl_->release_replacements();
     }
 }
 
