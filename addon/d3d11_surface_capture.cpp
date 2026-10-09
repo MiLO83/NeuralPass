@@ -615,6 +615,26 @@ UvSemantic inspect_uv_output(const void *bytecode, std::size_t size) {
 
 SurfaceCapture::~SurfaceCapture() { reset(); }
 
+capture::GraphicsBackend SurfaceCapture::backend() const noexcept {
+    return capture::GraphicsBackend::d3d11;
+}
+
+capture::CaptureCapabilities SurfaceCapture::capabilities() const noexcept {
+    return {
+        .direct_draws = true,
+        .indexed_draws = true,
+        .indirect_draws = true,
+        .replacement_textures = true,
+        .asynchronous_readback = true,
+        .shader_coverage_preserved = false,
+    };
+}
+
+bool SurfaceCapture::initialize(void *native_device, std::uint32_t width,
+                                std::uint32_t height) {
+    return initialize(static_cast<ID3D11Device *>(native_device), width, height);
+}
+
 bool SurfaceCapture::initialize(ID3D11Device *device, std::uint32_t width,
                                 std::uint32_t height) {
     reset();
@@ -703,6 +723,40 @@ void SurfaceCapture::reset() {
     impl_ = nullptr;
 }
 
+bool SurfaceCapture::replay(void *native_command_list, const UvSemantic &uv,
+                            std::uint64_t material_id,
+                            const capture::DrawCommand &draw,
+                            int source_texture_override) {
+    auto *context = static_cast<ID3D11DeviceContext *>(native_command_list);
+    switch (draw.kind) {
+    case capture::DrawKind::direct:
+        return this->draw(context, uv, material_id, draw.vertex_or_index_count,
+                          draw.instance_count, draw.first_vertex_or_index,
+                          draw.first_instance, source_texture_override);
+    case capture::DrawKind::indexed:
+        return draw_indexed(context, uv, material_id, draw.vertex_or_index_count,
+                            draw.instance_count, draw.first_vertex_or_index,
+                            draw.vertex_offset, draw.first_instance,
+                            source_texture_override);
+    case capture::DrawKind::indirect:
+        if (draw.argument_offset > UINT_MAX) return false;
+        return draw_indirect(context, uv, material_id,
+            static_cast<ID3D11Buffer *>(draw.argument_buffer),
+            static_cast<std::uint32_t>(draw.argument_offset), source_texture_override);
+    case capture::DrawKind::indexed_indirect:
+        if (draw.argument_offset > UINT_MAX) return false;
+        return draw_indexed_indirect(context, uv, material_id,
+            static_cast<ID3D11Buffer *>(draw.argument_buffer),
+            static_cast<std::uint32_t>(draw.argument_offset), source_texture_override);
+    }
+    return false;
+}
+
+std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
+    void *native_command_list) {
+    return finish_frame(static_cast<ID3D11DeviceContext *>(native_command_list));
+}
+
 std::uint64_t SurfaceCapture::replayed_draws() const noexcept {
     return impl_ != nullptr ? impl_->replayed_draws : 0;
 }
@@ -717,6 +771,15 @@ std::uint64_t SurfaceCapture::replacement_draws() const noexcept {
 
 std::uint64_t SurfaceCapture::rejected_replacements() const noexcept {
     return impl_ != nullptr ? impl_->rejected_replacements : 0;
+}
+
+capture::CaptureStatistics SurfaceCapture::statistics() const noexcept {
+    return {
+        .replayed_draws = replayed_draws(),
+        .dropped_frames = dropped_frames(),
+        .replacement_draws = replacement_draws(),
+        .rejected_replacements = rejected_replacements(),
+    };
 }
 
 std::uint32_t SurfaceCapture::width() const noexcept {

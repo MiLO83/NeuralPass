@@ -281,6 +281,14 @@ void test_triangle_replay_produces_material_uv() {
 
     neuralpass::d3d11_capture::SurfaceCapture capture;
     require(capture.initialize(device, 8, 8), "could not initialize surface capture");
+    neuralpass::capture::SurfaceCaptureBackend &backend = capture;
+    const auto capabilities = backend.capabilities();
+    require(backend.backend() == neuralpass::capture::GraphicsBackend::d3d11 &&
+            capabilities.direct_draws && capabilities.indexed_draws &&
+            capabilities.indirect_draws && capabilities.replacement_textures &&
+            capabilities.asynchronous_readback &&
+            !capabilities.shader_coverage_preserved,
+        "D3D11 backend reported inaccurate capabilities");
     constexpr std::uint64_t first_material_id = 0x12345678abcdef01ull;
     constexpr std::uint64_t material_id = 0xfedcba9876543210ull;
     neuralpass::d3d11_capture::ReplacementMip replacement;
@@ -332,7 +340,11 @@ void test_triangle_replay_produces_material_uv() {
         "unsupported replacement fixture draw was not handled");
     require(capture.rejected_replacements() == 1,
         "unsupported replacement circuit breaker retried the same source");
-    require(capture.draw(context, uv_semantic, first_material_id, 3, 2, 0, 0),
+    neuralpass::capture::DrawCommand direct_draw;
+    direct_draw.kind = neuralpass::capture::DrawKind::direct;
+    direct_draw.vertex_or_index_count = 3;
+    direct_draw.instance_count = 2;
+    require(backend.replay(context, uv_semantic, first_material_id, direct_draw),
         "capture adapter did not handle the triangle draw");
     require(capture.draw_indexed(context, uv_semantic, material_id, 3, 2, 0, 0, 0, 5),
         "capture adapter did not handle the indexed triangle draw");

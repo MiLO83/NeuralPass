@@ -79,7 +79,7 @@ struct PipelineCaptureInfo {
     bool has_position = false;
 };
 std::unordered_map<std::uint64_t, PipelineCaptureInfo> g_pipeline_capture_info;
-std::unordered_map<std::uint64_t, neuralpass::d3d11_capture::UvSemantic> g_vertex_uv_outputs;
+std::unordered_map<std::uint64_t, neuralpass::capture::UvInput> g_vertex_uv_outputs;
 std::unordered_map<std::uint64_t, std::uint64_t> g_pipeline_fingerprints;
 std::unordered_map<std::uint64_t, ResourceFingerprint> g_resource_fingerprints;
 std::unordered_set<std::uint64_t> g_vertex_buffers_probed;
@@ -104,7 +104,7 @@ std::unordered_set<std::uint64_t> g_restart_stable_materials;
 std::unordered_map<std::uint64_t, int> g_source_slot_overrides;
 std::unordered_set<std::uint64_t> g_source_overrides_loaded;
 std::unordered_map<reshade::api::device *,
-    std::unique_ptr<neuralpass::d3d11_capture::SurfaceCapture>> g_d3d11_captures;
+    std::unique_ptr<neuralpass::capture::SurfaceCaptureBackend>> g_surface_captures;
 
 constexpr char k_source_slot_section[] = "NeuralPass.SourceSlots";
 
@@ -743,22 +743,28 @@ bool on_baker_draw(reshade::api::command_list *command_list, std::uint32_t verte
     if (material.value == 0 || command_list->get_device()->get_api() !=
             reshade::api::device_api::d3d11) return false;
     const auto *state = command_list->get_private_data<BakerCommandState>();
-    neuralpass::d3d11_capture::UvSemantic uv;
-    neuralpass::d3d11_capture::SurfaceCapture *capture = nullptr;
+    neuralpass::capture::UvInput uv;
+    neuralpass::capture::SurfaceCaptureBackend *capture = nullptr;
     int source_override = -1;
     {
         std::lock_guard lock(g_baker_probe_mutex);
         if (const auto found = g_vertex_uv_outputs.find(state->vertex_pipeline.handle);
             found != g_vertex_uv_outputs.end()) uv = found->second;
-        if (const auto found = g_d3d11_captures.find(command_list->get_device());
-            found != g_d3d11_captures.end()) capture = found->second.get();
+        if (const auto found = g_surface_captures.find(command_list->get_device());
+            found != g_surface_captures.end()) capture = found->second.get();
         if (const auto found = g_source_slot_overrides.find(material.value);
             found != g_source_slot_overrides.end()) source_override = found->second;
     }
-    return capture != nullptr && uv.valid() && capture->draw(
-        reinterpret_cast<ID3D11DeviceContext *>(command_list->get_native()), uv,
-        material.value, vertex_count, instance_count, first_vertex, first_instance,
-        source_override);
+    const neuralpass::capture::DrawCommand draw {
+        .kind = neuralpass::capture::DrawKind::direct,
+        .vertex_or_index_count = vertex_count,
+        .instance_count = instance_count,
+        .first_vertex_or_index = first_vertex,
+        .first_instance = first_instance,
+    };
+    return capture != nullptr && uv.valid() && capture->replay(
+        reinterpret_cast<void *>(command_list->get_native()), uv, material.value,
+        draw, source_override);
 }
 
 bool on_baker_draw_indexed(reshade::api::command_list *command_list,
@@ -769,22 +775,29 @@ bool on_baker_draw_indexed(reshade::api::command_list *command_list,
     if (material.value == 0 || command_list->get_device()->get_api() !=
             reshade::api::device_api::d3d11) return false;
     const auto *state = command_list->get_private_data<BakerCommandState>();
-    neuralpass::d3d11_capture::UvSemantic uv;
-    neuralpass::d3d11_capture::SurfaceCapture *capture = nullptr;
+    neuralpass::capture::UvInput uv;
+    neuralpass::capture::SurfaceCaptureBackend *capture = nullptr;
     int source_override = -1;
     {
         std::lock_guard lock(g_baker_probe_mutex);
         if (const auto found = g_vertex_uv_outputs.find(state->vertex_pipeline.handle);
             found != g_vertex_uv_outputs.end()) uv = found->second;
-        if (const auto found = g_d3d11_captures.find(command_list->get_device());
-            found != g_d3d11_captures.end()) capture = found->second.get();
+        if (const auto found = g_surface_captures.find(command_list->get_device());
+            found != g_surface_captures.end()) capture = found->second.get();
         if (const auto found = g_source_slot_overrides.find(material.value);
             found != g_source_slot_overrides.end()) source_override = found->second;
     }
-    return capture != nullptr && uv.valid() && capture->draw_indexed(
-        reinterpret_cast<ID3D11DeviceContext *>(command_list->get_native()), uv,
-        material.value, index_count, instance_count, first_index, vertex_offset,
-        first_instance, source_override);
+    const neuralpass::capture::DrawCommand draw {
+        .kind = neuralpass::capture::DrawKind::indexed,
+        .vertex_or_index_count = index_count,
+        .instance_count = instance_count,
+        .first_vertex_or_index = first_index,
+        .vertex_offset = vertex_offset,
+        .first_instance = first_instance,
+    };
+    return capture != nullptr && uv.valid() && capture->replay(
+        reinterpret_cast<void *>(command_list->get_native()), uv, material.value,
+        draw, source_override);
 }
 
 bool on_baker_draw_indirect(reshade::api::command_list *command_list,
@@ -799,26 +812,29 @@ bool on_baker_draw_indirect(reshade::api::command_list *command_list,
     if (material.value == 0 || command_list->get_device()->get_api() !=
             reshade::api::device_api::d3d11) return false;
     const auto *state = command_list->get_private_data<BakerCommandState>();
-    neuralpass::d3d11_capture::UvSemantic uv;
-    neuralpass::d3d11_capture::SurfaceCapture *capture = nullptr;
+    neuralpass::capture::UvInput uv;
+    neuralpass::capture::SurfaceCaptureBackend *capture = nullptr;
     int source_override = -1;
     {
         std::lock_guard lock(g_baker_probe_mutex);
         if (const auto found = g_vertex_uv_outputs.find(state->vertex_pipeline.handle);
             found != g_vertex_uv_outputs.end()) uv = found->second;
-        if (const auto found = g_d3d11_captures.find(command_list->get_device());
-            found != g_d3d11_captures.end()) capture = found->second.get();
+        if (const auto found = g_surface_captures.find(command_list->get_device());
+            found != g_surface_captures.end()) capture = found->second.get();
         if (const auto found = g_source_slot_overrides.find(material.value);
             found != g_source_slot_overrides.end()) source_override = found->second;
     }
     if (capture == nullptr || !uv.valid()) return false;
-    auto *context = reinterpret_cast<ID3D11DeviceContext *>(command_list->get_native());
-    auto *arguments = reinterpret_cast<ID3D11Buffer *>(buffer.handle);
-    if (type == reshade::api::indirect_command::draw)
-        return capture->draw_indirect(context, uv, material.value, arguments,
-                                      static_cast<std::uint32_t>(offset), source_override);
-    return capture->draw_indexed_indirect(context, uv, material.value, arguments,
-                                          static_cast<std::uint32_t>(offset), source_override);
+    const neuralpass::capture::DrawCommand draw {
+        .kind = type == reshade::api::indirect_command::draw
+            ? neuralpass::capture::DrawKind::indirect
+            : neuralpass::capture::DrawKind::indexed_indirect,
+        .argument_buffer = reinterpret_cast<void *>(buffer.handle),
+        .argument_offset = offset,
+        .draw_count = draw_count,
+    };
+    return capture->replay(reinterpret_cast<void *>(command_list->get_native()), uv,
+                           material.value, draw, source_override);
 }
 
 struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
@@ -831,7 +847,7 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::deque<std::vector<std::uint8_t>> bridge_ready;
     std::unordered_map<std::uint64_t, neuralpass::SurfaceCaptureFrame> surface_ready;
     std::unordered_map<std::uint64_t,
-        std::vector<neuralpass::d3d11_capture::ReplacementMip>> ready_replacements;
+        std::vector<neuralpass::capture::ReplacementMip>> ready_replacements;
     bool has_pending = false;
     bool has_ready = false;
     std::uint32_t ready_width = 0;
@@ -1091,14 +1107,14 @@ void publish_replacement_snapshots(
     for (const auto &sample : samples)
         if (sample.material_id != 0) material_ids.insert(sample.material_id);
     std::unordered_map<std::uint64_t,
-        std::vector<neuralpass::d3d11_capture::ReplacementMip>> snapshots;
+        std::vector<neuralpass::capture::ReplacementMip>> snapshots;
     for (const auto material_id : material_ids) {
         if (!force && published.contains(material_id)) continue;
         const auto *atlas = baker.find(material_id);
         if (atlas == nullptr) continue;
-        std::vector<neuralpass::d3d11_capture::ReplacementMip> packed;
+        std::vector<neuralpass::capture::ReplacementMip> packed;
         for (const auto &mip : atlas->generate_mips()) {
-            neuralpass::d3d11_capture::ReplacementMip output;
+            neuralpass::capture::ReplacementMip output;
             output.width = mip.color.width();
             output.height = mip.color.height();
             output.rgba.resize(mip.color.size() * 4);
@@ -1587,7 +1603,7 @@ void on_init(reshade::api::effect_runtime *runtime) {
                 reinterpret_cast<ID3D11Device *>(runtime->get_device()->get_native()),
                 desc.texture.width, desc.texture.height)) {
             std::lock_guard lock(g_baker_probe_mutex);
-            g_d3d11_captures[runtime->get_device()] = std::move(capture);
+            g_surface_captures[runtime->get_device()] = std::move(capture);
         } else {
             reshade::log::message(reshade::log::level::warning,
                 "NeuralPass could not initialize the D3D11 mesh-UV capture surface.");
@@ -1606,13 +1622,13 @@ void on_destroy(reshade::api::effect_runtime *runtime) {
         state->wake.notify_all();
         if (state->worker.joinable()) state->worker.join();
         runtime->get_command_queue()->wait_idle();
-        std::unique_ptr<neuralpass::d3d11_capture::SurfaceCapture> capture;
+        std::unique_ptr<neuralpass::capture::SurfaceCaptureBackend> capture;
         {
             std::lock_guard lock(g_baker_probe_mutex);
-            if (const auto found = g_d3d11_captures.find(runtime->get_device());
-                found != g_d3d11_captures.end()) {
+            if (const auto found = g_surface_captures.find(runtime->get_device());
+                found != g_surface_captures.end()) {
                 capture = std::move(found->second);
-                g_d3d11_captures.erase(found);
+                g_surface_captures.erase(found);
             }
         }
         destroy_readback(runtime, *state);
@@ -1657,18 +1673,17 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
     const auto source = device->get_resource_from_view(rtv);
     const auto source_desc = device->get_resource_desc(source);
     if (device->get_api() == reshade::api::device_api::d3d11 && command_list != nullptr) {
-        neuralpass::d3d11_capture::SurfaceCapture *capture = nullptr;
+        neuralpass::capture::SurfaceCaptureBackend *capture = nullptr;
         {
             std::scoped_lock lock(g_baker_probe_mutex, state->mutex);
-            if (const auto found = g_d3d11_captures.find(device);
-                found != g_d3d11_captures.end()) {
+            if (const auto found = g_surface_captures.find(device);
+                found != g_surface_captures.end()) {
                 capture = found->second.get();
                 if (capture->width() != source_desc.texture.width ||
                     capture->height() != source_desc.texture.height) {
                     state->surface_ready.clear();
                     state->pending_surface.reset();
-                    if (!capture->initialize(
-                            reinterpret_cast<ID3D11Device *>(device->get_native()),
+                    if (!capture->initialize(reinterpret_cast<void *>(device->get_native()),
                             source_desc.texture.width, source_desc.texture.height)) {
                         reshade::log::message(reshade::log::level::warning,
                             "NeuralPass could not resize the D3D11 mesh-UV capture surface.");
@@ -1686,7 +1701,7 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
         }
         if (capture != nullptr) {
             auto surface = capture->finish_frame(
-                reinterpret_cast<ID3D11DeviceContext *>(command_list->get_native()));
+                reinterpret_cast<void *>(command_list->get_native()));
             if (surface) {
                 std::uint64_t supported = 0;
                 for (const auto &pixel : surface->pixels().pixels())
@@ -1914,12 +1929,13 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
     std::uint64_t rejected_replacements = 0;
     {
         std::lock_guard lock(g_baker_probe_mutex);
-        if (const auto found = g_d3d11_captures.find(runtime->get_device());
-            found != g_d3d11_captures.end()) {
-            replayed_draws = found->second->replayed_draws();
-            capture_drops = found->second->dropped_frames();
-            replacement_draws = found->second->replacement_draws();
-            rejected_replacements = found->second->rejected_replacements();
+        if (const auto found = g_surface_captures.find(runtime->get_device());
+            found != g_surface_captures.end()) {
+            const auto statistics = found->second->statistics();
+            replayed_draws = statistics.replayed_draws;
+            capture_drops = statistics.dropped_frames;
+            replacement_draws = statistics.replacement_draws;
+            rejected_replacements = statistics.rejected_replacements;
         }
     }
     ImGui::Text("D3D11 UV replay draws: %llu  Readback drops: %llu",

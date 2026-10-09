@@ -1,10 +1,10 @@
 #pragma once
 
+#include "surface_capture_backend.hpp"
+
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include "neuralpass/surface_capture.hpp"
-
 #include <d3d11.h>
 
 #include <cstdint>
@@ -14,36 +14,32 @@
 
 namespace neuralpass::d3d11_capture {
 
-struct UvSemantic {
-    std::string name;
-    std::uint32_t index = 0;
-    std::uint32_t register_index = 0;
-
-    [[nodiscard]] bool valid() const noexcept { return !name.empty(); }
-};
-
-struct ReplacementMip {
-    std::uint32_t width = 0;
-    std::uint32_t height = 0;
-    std::vector<std::uint8_t> rgba;
-    std::vector<std::uint8_t> coverage;
-};
+using UvSemantic = capture::UvInput;
+using ReplacementMip = capture::ReplacementMip;
 
 // Reads the vertex shader output signature and selects the first two-component
 // (or wider) TEXCOORD interpolant. This is the value rasterization actually
 // feeds to the pixel shader, rather than an untransformed vertex-buffer guess.
 [[nodiscard]] UvSemantic inspect_uv_output(const void *bytecode, std::size_t size);
 
-class SurfaceCapture {
+class SurfaceCapture final : public capture::SurfaceCaptureBackend {
 public:
     SurfaceCapture() = default;
     ~SurfaceCapture();
     SurfaceCapture(const SurfaceCapture &) = delete;
     SurfaceCapture &operator=(const SurfaceCapture &) = delete;
 
+    [[nodiscard]] capture::GraphicsBackend backend() const noexcept override;
+    [[nodiscard]] capture::CaptureCapabilities capabilities() const noexcept override;
+    [[nodiscard]] bool initialize(void *native_device, std::uint32_t width,
+                                  std::uint32_t height) override;
     [[nodiscard]] bool initialize(ID3D11Device *device, std::uint32_t width,
                                   std::uint32_t height);
-    void reset();
+    void reset() override;
+    [[nodiscard]] bool replay(void *native_command_list, const UvSemantic &uv,
+                              std::uint64_t material_id,
+                              const capture::DrawCommand &draw,
+                              int source_texture_override = -1) override;
 
     // Called from ReShade's pre-draw event. On success this executes the game
     // draw exactly once, replays it into the UV surface, restores all touched
@@ -71,17 +67,20 @@ public:
     // Polls completed staging copies without flushing or waiting, then queues
     // the current surface into a free ring slot and clears it for the next frame.
     [[nodiscard]] std::optional<SurfaceCaptureFrame> finish_frame(
+        void *native_command_list) override;
+    [[nodiscard]] std::optional<SurfaceCaptureFrame> finish_frame(
         ID3D11DeviceContext *context);
 
     [[nodiscard]] std::uint64_t replayed_draws() const noexcept;
     [[nodiscard]] std::uint64_t dropped_frames() const noexcept;
     [[nodiscard]] std::uint64_t replacement_draws() const noexcept;
     [[nodiscard]] std::uint64_t rejected_replacements() const noexcept;
-    [[nodiscard]] std::uint32_t width() const noexcept;
-    [[nodiscard]] std::uint32_t height() const noexcept;
+    [[nodiscard]] capture::CaptureStatistics statistics() const noexcept override;
+    [[nodiscard]] std::uint32_t width() const noexcept override;
+    [[nodiscard]] std::uint32_t height() const noexcept override;
     void queue_replacement(std::uint64_t material_id,
-                           std::vector<ReplacementMip> mips);
-    void clear_replacements();
+                           std::vector<ReplacementMip> mips) override;
+    void clear_replacements() override;
 
 private:
     struct Impl;
