@@ -88,7 +88,11 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 3. GRAPHICS API ADAPTERS
 ------------------------
 [ ] Production D3D9 x86/x64 capture and replacement.
-[ ] Production D3D10 x86/x64 capture and replacement.
+[~] Production D3D10 x86/x64 capture and replacement.
+    Evidence: experimental x64 Shader Model 4 direct/indexed replay, four-plane
+    asynchronous capture, complete touched-state restoration, coverage-safe
+    RGBA8/BGRA8 replacement, and same-source material isolation pass D3D10 WARP.
+    Device loss, x86, hardware/game evidence, and soak testing remain.
 [~] Production D3D11 x86/x64 capture and replacement.
     Evidence: x64 D3D11 capture plus coverage-safe RGBA8/BGRA8 substitution passes WARP;
     direct/indirect indexed and non-indexed instanced draws are covered; x86, broad
@@ -115,13 +119,14 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     native replacement tests,
     device loss, x86, and real-game evidence remain.
 [~] Support indexed, non-indexed, instanced, and indirect draws.
-    Evidence: D3D11 handles direct and indirect indexed/non-indexed instanced draws,
+    Evidence: D3D10 handles direct/indexed instanced draws (the API has no general
+    indirect draw), and D3D11 handles direct and indirect indexed/non-indexed instanced draws,
     with application draw, capture replay, and replacement verified under WARP.
     D3D12 now has matching direct/indexed/indirect dispatch code and WARP-tested command
     signatures/readback resources and an actual direct backend replay. Vulkan has
     matching code for direct/indexed and single-command indirect replay, but only
     compile/SPIR-V validation so far. Production companion-PSO creation evidence
-    remains for both explicit APIs and all evidence remains for D3D9/10.
+    remains for both explicit APIs and all evidence remains for D3D9.
 [~] Restore every touched pipeline, descriptor, target, depth, UAV, and dynamic state.
     Evidence: D3D11 replay restores pixel shader and dynamic-linkage instances,
     selected source SRV, MRTs, depth view/state, blend factors/sample mask, stencil
@@ -209,13 +214,13 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [x] Direct observations replace earlier inpainted texels.
     Evidence: provenance supersession test verifies color, coverage, alpha, and no reschedule.
 [x] Shared sources with distinct bindings receive separate replacements.
-    Evidence: D3D11 WARP alternates two binding-keyed atlas replacements over the
+    Evidence: D3D10/D3D11 WARP alternate two binding-keyed atlas replacements over the
     same source SRV and verifies that each draw receives only its own styled pixels.
 [ ] UV seams, overlapping UVs, alpha cutouts, HDR, and depth conflicts remain isolated.
 [~] D3D9 reference, D3D10/11/12 WARP, and Vulkan SwiftShader suites pass.
-    Evidence: D3D11 replay/replacement and D3D12 resource/barrier/fence/readback plus
+    Evidence: D3D10/D3D11 replay/replacement and D3D12 resource/barrier/fence/readback plus
     native descriptor-isolation and backend replay WARP suites pass; production-created
-    D3D12 companion PSOs, D3D9/10, and Vulkan SwiftShader remain.
+    D3D12 companion PSOs, D3D9, and Vulkan SwiftShader remain.
 [ ] Resize, device-loss, corrupt-cache, and worker-restart tests pass.
 [ ] Steel Nomad D3D12 stress validation passes.
 [ ] Each API completes a 60-minute soak without crash or device removal.

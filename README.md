@@ -31,7 +31,7 @@ test or release artifact; `[~]` means the production path is still incomplete.
 
 The generic path uses framebuffer color confidence. The core accepts depth,
 motion, mesh UV gradients, binding identity, and visibility classes. The
-experimental D3D11 and D3D12 adapters supply exact rasterized mesh UVs and
+experimental D3D10, D3D11, and D3D12 adapters supply exact rasterized mesh UVs and
 gradients; D3D12 now also samples a descriptor-tracked source texture when a
 compatible texture/sampler pair is bound. Its bounded-table RGBA8/BGRA8
 replacement path is experimental and still needs real-game validation. A new
@@ -184,9 +184,9 @@ inpaint, and direct observations; a later direct observation may replace an
 inpainted texel. Source alpha is retained. Uncovered pixels always keep the live
 framebuffer rather than sampling a debug sentinel.
 
-The ReShade add-on has an experimental D3D11 surface adapter. It reflects the
-vertex shader's rasterized `TEXCOORD`, executes the game's draw once, then
-replays it into an `RGBA32_UINT` identity/UV target plus gradient, source-color,
+The ReShade add-on has experimental D3D10 and D3D11 surface adapters. They reflect the
+vertex shader's rasterized `TEXCOORD`, execute the game's draw once, then
+replay it into an `RGBA32_UINT` identity/UV target plus gradient, source-color,
 and device-depth targets. The adapter ranks currently bound sampleable
 2D color SRVs, samples its aggressive base-color candidate with the mesh UV,
 and emits NaN when no trustworthy texture/sampler pair exists. The overlay can
@@ -233,7 +233,9 @@ first-observation evidence while the reveal-only atlas planner still schedules
 its uncovered UVs. Missing capture frames break the comparison chain rather
 than reprojecting across an unknown gap.
 
-D3D9/10 still require equivalent adapters. D3D12 has experimental PSO replay,
+D3D9 still requires an equivalent adapter. D3D10 has native Shader Model 4 draw
+replay, asynchronous readback, and isolated RGBA8/BGRA8 replacement under WARP.
+D3D12 has experimental PSO replay,
 asynchronous capture, and descriptor-isolated RGBA8/BGRA8 replacement. Vulkan
 has SPIR-V vertex instrumentation, pipeline replay, and asynchronous readback, but
 accepts a draw only when it can safely identify and instrument a plain float2 UV
@@ -246,8 +248,9 @@ contract.
 
 | Graphics API | Geometry capture status |
 | --- | --- |
+| D3D10 | Experimental direct/indexed replay and RGBA8/BGRA8 replacement; automated WARP coverage |
 | D3D11 | Experimental draw replay and RGBA8/BGRA8 replacement; automated WARP coverage |
-| D3D9 / D3D10 | Adapter required |
+| D3D9 | Adapter required |
 | D3D12 | Experimental direct/indirect PSO replay, readback, and bounded-table RGBA8/BGRA8 replacement; game validation pending |
 | Vulkan | Experimental SPIR-V UV/source capture, asynchronous readback, and bounded-table RGBA8/BGRA8 replacement; no hardware/game evidence yet |
 
@@ -266,7 +269,7 @@ backend without starting the game.
 
 ## Important limitations
 
-- Geometry-aware persistent baking is validated only on D3D11 WARP; D3D12 and
+- Geometry-aware persistent baking is validated on D3D10/D3D11 WARP; D3D12 and
   Vulkan adapters remain experimental and this is not a cross-API production release.
 - The D3D11 replay shader rejects fully transparent texels from its selected
   source texture, but cannot reproduce application-specific `discard`, custom

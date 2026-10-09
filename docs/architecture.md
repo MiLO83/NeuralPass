@@ -148,6 +148,18 @@ texel. Missing candidates are encoded as NaN and cannot enter source-transfer ba
 Blend, depth/stencil, render targets, UAVs, and the original pixel shader are
 restored before control returns to the game.
 
+### D3D10 replay adapter
+
+The D3D10 adapter follows the D3D11 immediate-context contract with native
+Shader Model 4 objects. It reflects the rasterized vertex-shader output, executes
+the application draw once, replays direct or indexed geometry into the four
+canonical MRT planes, and restores pixel shader, blend, depth-stencil, render
+targets, and selected source binding. A three-slot event-query ring makes capture
+readback nonblocking. For non-array RGBA8/BGRA8 sources it clones the original
+resource and patches only covered atlas runs, keeping replacements isolated by
+material identity. D3D10 has no general indirect draw entry point; device-loss
+and real-game evidence remain promotion gates.
+
 ### D3D12 replay adapter
 
 The D3D12 preview records complete graphics-pipeline creation metadata and builds
