@@ -105,6 +105,7 @@ std::optional<Manifest> newest_manifest(const std::filesystem::path &directory) 
     std::error_code error;
     std::optional<Manifest> result;
     std::filesystem::file_time_type newest {};
+    std::filesystem::path newest_path;
     for (const auto &entry : std::filesystem::directory_iterator(directory, error)) {
         if (error) break;
         if (!entry.is_regular_file(error) || entry.path().extension() != ".npscene") continue;
@@ -112,8 +113,11 @@ std::optional<Manifest> newest_manifest(const std::filesystem::path &directory) 
         if (!manifest) continue;
         const auto modified = entry.last_write_time(error);
         if (error) { error.clear(); continue; }
-        if (!result || modified > newest) {
+        if (!result || manifest->bindings.size() > result->bindings.size() ||
+            (manifest->bindings.size() == result->bindings.size() &&
+             (modified > newest || (modified == newest && entry.path() > newest_path)))) {
             newest = modified;
+            newest_path = entry.path();
             result = std::move(manifest);
         }
     }

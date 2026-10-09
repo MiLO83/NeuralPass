@@ -150,7 +150,8 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [x] Same-scene hard cuts preserve atlases; new-scene cuts isolate generations.
     Evidence: camera-cut preservation and confirmed-new-scene generation tests.
 [x] Returning views reuse established coverage without regeneration.
-    Evidence: zero-reveal covered-plan test plus persistent returning-view catalog test.
+    Evidence: zero-reveal covered-plan test plus persistent returning-view catalog test;
+    manifest selection is deterministic on coarse-timestamp Windows filesystems.
 [x] Permanently invisible texels remain identical to the source.
     Evidence: conservative mip coverage tests plus D3D11 WARP sparse replacement test.
 [x] Direct observations replace earlier inpainted texels.
