@@ -182,7 +182,8 @@ coverage-safe mip chain. The replacement SRV is bound only for the application
 draw and the original SRV is restored before the capture replay, so unseen
 texels and transfer inputs remain original. Scene changes discard the live
 replacement set before the new namespace can draw. WARP verifies substitution,
-uncovered-source preservation, and SRV restoration.
+uncovered-source preservation, SRV restoration, and isolation of distinct binding
+replacements that share the same source texture.
 Unsupported replacement layouts trip a per-binding/resource circuit breaker:
 the adapter reports one rejection in the overlay and falls back without retrying
 GPU allocation every draw. A new atlas snapshot or source resource retries it.

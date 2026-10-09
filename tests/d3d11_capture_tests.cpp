@@ -37,6 +37,32 @@ ID3DBlob *compile(const char *source, const char *profile) {
     return shader;
 }
 
+std::array<std::uint8_t, 4> read_pixel(ID3D11Device *device,
+                                      ID3D11DeviceContext *context,
+                                      ID3D11Texture2D *texture,
+                                      std::uint32_t x, std::uint32_t y) {
+    D3D11_TEXTURE2D_DESC desc {};
+    texture->GetDesc(&desc);
+    require(x < desc.Width && y < desc.Height, "pixel readback is out of bounds");
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.BindFlags = 0;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    desc.MiscFlags = 0;
+    ID3D11Texture2D *staging = nullptr;
+    require(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &staging)),
+        "could not create pixel readback texture");
+    context->CopyResource(staging, texture);
+    D3D11_MAPPED_SUBRESOURCE mapped {};
+    require(SUCCEEDED(context->Map(staging, 0, D3D11_MAP_READ, 0, &mapped)),
+        "could not map pixel readback texture");
+    std::array<std::uint8_t, 4> pixel {};
+    std::memcpy(pixel.data(), static_cast<const std::uint8_t *>(mapped.pData) +
+        static_cast<std::size_t>(y) * mapped.RowPitch + x * 4, pixel.size());
+    context->Unmap(staging, 0);
+    release(staging);
+    return pixel;
+}
+
 void test_triangle_replay_produces_material_uv() {
     ID3D11Device *device = nullptr;
     ID3D11DeviceContext *context = nullptr;
@@ -217,6 +243,19 @@ void test_triangle_replay_produces_material_uv() {
         replacement.coverage[y * 4 + 0] = 0;
     }
     capture.queue_replacement(material_id, {std::move(replacement)});
+    constexpr std::uint64_t shared_source_material_id = 0x0badf00d12344321ull;
+    neuralpass::d3d11_capture::ReplacementMip shared_source_replacement;
+    shared_source_replacement.width = shared_source_replacement.height = 4;
+    shared_source_replacement.rgba.resize(4 * 4 * 4);
+    shared_source_replacement.coverage.resize(4 * 4, 2);
+    for (std::size_t index = 0; index < shared_source_replacement.rgba.size(); index += 4) {
+        shared_source_replacement.rgba[index + 0] = 12;
+        shared_source_replacement.rgba[index + 1] = 210;
+        shared_source_replacement.rgba[index + 2] = 30;
+        shared_source_replacement.rgba[index + 3] = 191;
+    }
+    capture.queue_replacement(shared_source_material_id,
+                              {std::move(shared_source_replacement)});
     D3D11_TEXTURE2D_DESC unsupported_desc = source_desc;
     unsupported_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
     unsupported_desc.Usage = D3D11_USAGE_DEFAULT;
@@ -243,9 +282,29 @@ void test_triangle_replay_produces_material_uv() {
         "capture adapter did not handle the triangle draw");
     require(capture.draw_indexed(context, uv_semantic, material_id, 3, 1, 0, 0, 0, 5),
         "capture adapter did not handle the indexed triangle draw");
-    require(capture.replayed_draws() == 4, "draw variants were not each replayed once");
-    require(capture.replacement_draws() == 1,
-        "replacement draw accounting did not report the substituted draw");
+    const auto first_binding_pixel = read_pixel(device, context, target, 7, 7);
+    require(std::abs(static_cast<int>(first_binding_pixel[0]) - 200) <= 1 &&
+            std::abs(static_cast<int>(first_binding_pixel[1]) - 10) <= 1 &&
+            std::abs(static_cast<int>(first_binding_pixel[2]) - 20) <= 1,
+        "first binding did not use its replacement for the shared source");
+    require(capture.draw_indexed(context, uv_semantic, shared_source_material_id,
+                                 3, 1, 0, 0, 0, 5),
+        "second binding sharing a source was not handled");
+    const auto second_binding_pixel = read_pixel(device, context, target, 7, 7);
+    require(std::abs(static_cast<int>(second_binding_pixel[0]) - 12) <= 1 &&
+            std::abs(static_cast<int>(second_binding_pixel[1]) - 210) <= 1 &&
+            std::abs(static_cast<int>(second_binding_pixel[2]) - 30) <= 1,
+        "second binding reused the first binding's replacement");
+    require(capture.draw_indexed(context, uv_semantic, material_id, 3, 1, 0, 0, 0, 5),
+        "first shared-source binding could not be restored");
+    const auto restored_binding_pixel = read_pixel(device, context, target, 7, 7);
+    require(std::abs(static_cast<int>(restored_binding_pixel[0]) - 200) <= 1 &&
+            std::abs(static_cast<int>(restored_binding_pixel[1]) - 10) <= 1 &&
+            std::abs(static_cast<int>(restored_binding_pixel[2]) - 20) <= 1,
+        "first binding replacement was contaminated by the second binding");
+    require(capture.replayed_draws() == 6, "draw variants were not each replayed once");
+    require(capture.replacement_draws() == 3,
+        "replacement draw accounting did not report all substituted draws");
 
     ID3D11PixelShader *restored_pixel_shader = nullptr;
     context->PSGetShader(&restored_pixel_shader, nullptr, nullptr);
