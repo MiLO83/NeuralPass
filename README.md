@@ -159,7 +159,9 @@ vertex shader's rasterized `TEXCOORD`, executes the game's draw once, then
 replays it into an `RGBA32_UINT` identity/UV target plus `RGBA32_FLOAT`
 gradient and source-color targets. The adapter ranks currently bound sampleable
 2D color SRVs, samples its aggressive base-color candidate with the mesh UV,
-and emits NaN when no trustworthy texture/sampler pair exists. A three-slot
+and emits NaN when no trustworthy texture/sampler pair exists. The overlay can
+override that choice per pipeline-plus-descriptor binding by forcing a D3D11
+pixel-shader SRV slot, or return the binding to automatic selection. A three-slot
 staging ring asynchronously decodes the 64-bit pipeline-plus-descriptor binding
 ID, exact UV, `ddx`/`ddy` footprint, and source texel. A
 Windows WARP test covers indexed and non-indexed replay, derivative capture,
@@ -200,8 +202,9 @@ backend without starting the game.
 - The D3D11 replay shader cannot reproduce application pixel-shader `discard`
   or alpha-test logic yet, so cutout/translucent materials may produce invalid
   correspondence around transparent texels.
-- D3D11 base-color selection is currently heuristic. A normal/emissive texture
-  can be selected in unusual material layouts until per-binding override UI lands.
+- D3D11 base-color selection is heuristic. If an unusual material layout selects
+  a normal/emissive texture, use the per-binding source-SRV override in the overlay;
+  these overrides are currently session-local.
 - v0.1 supports SDR RGBA8 capture. HDR/scRGB is not processed correctly yet.
 - The screen-space fallback cannot follow large camera motion as accurately as
   engine motion vectors; changed pixels are invalidated and restyled instead.

@@ -177,6 +177,21 @@ void test_triangle_replay_produces_material_uv() {
         "could not create source sampler fixture");
     context->PSSetShaderResources(3, 1, &source_view);
     context->PSSetSamplers(3, 1, &source_sampler);
+    auto override_pixels = source_pixels;
+    for (std::size_t index = 0; index < override_pixels.size(); index += 4) {
+        override_pixels[index + 0] = 16;
+        override_pixels[index + 1] = 32;
+        override_pixels[index + 2] = 240;
+        override_pixels[index + 3] = 191;
+    }
+    const D3D11_SUBRESOURCE_DATA override_data {override_pixels.data(), 4 * 4, 0};
+    ID3D11Texture2D *override_texture = nullptr;
+    ID3D11ShaderResourceView *override_view = nullptr;
+    require(SUCCEEDED(device->CreateTexture2D(&source_desc, &override_data, &override_texture)) &&
+            SUCCEEDED(device->CreateShaderResourceView(override_texture, nullptr, &override_view)),
+        "could not create source override fixture");
+    context->PSSetShaderResources(5, 1, &override_view);
+    context->PSSetSamplers(5, 1, &source_sampler);
 
     neuralpass::d3d11_capture::SurfaceCapture capture;
     require(capture.initialize(device, 8, 8), "could not initialize surface capture");
@@ -184,7 +199,7 @@ void test_triangle_replay_produces_material_uv() {
     constexpr std::uint64_t material_id = 0xfedcba9876543210ull;
     require(capture.draw(context, uv_semantic, first_material_id, 3, 1, 0, 0),
         "capture adapter did not handle the triangle draw");
-    require(capture.draw_indexed(context, uv_semantic, material_id, 3, 1, 0, 0, 0),
+    require(capture.draw_indexed(context, uv_semantic, material_id, 3, 1, 0, 0, 0, 5),
         "capture adapter did not handle the indexed triangle draw");
     require(capture.replayed_draws() == 2, "draw variants were not each replayed once");
 
@@ -234,13 +249,15 @@ void test_triangle_replay_produces_material_uv() {
         "captured UV gradients are invalid");
     require(std::isfinite(center.source_r) && std::isfinite(center.source_g) &&
             std::isfinite(center.source_b) && std::isfinite(center.source_a) &&
-            std::abs(center.source_r - 64.0f/255.0f) < 0.01f &&
-            std::abs(center.source_g - 128.0f/255.0f) < 0.01f &&
-            std::abs(center.source_b - 192.0f/255.0f) < 0.01f &&
-            std::abs(center.source_a - 77.0f/255.0f) < 0.01f,
-        "captured base/source texture sample is invalid");
+            std::abs(center.source_r - 16.0f/255.0f) < 0.01f &&
+            std::abs(center.source_g - 32.0f/255.0f) < 0.01f &&
+            std::abs(center.source_b - 240.0f/255.0f) < 0.01f &&
+            std::abs(center.source_a - 191.0f/255.0f) < 0.01f,
+        "per-binding source slot override did not select the requested texture");
 
     capture.reset();
+    release(override_view);
+    release(override_texture);
     release(source_sampler);
     release(source_view);
     release(source_texture);

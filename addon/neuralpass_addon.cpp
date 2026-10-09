@@ -100,6 +100,7 @@ std::atomic_uint64_t g_surface_frames_captured = 0;
 std::atomic_uint64_t g_surface_pixels_captured = 0;
 std::unordered_set<std::uint64_t> g_materials_seen;
 std::unordered_set<std::uint64_t> g_restart_stable_materials;
+std::unordered_map<std::uint64_t, int> g_source_slot_overrides;
 std::unordered_map<reshade::api::device *,
     std::unique_ptr<neuralpass::d3d11_capture::SurfaceCapture>> g_d3d11_captures;
 
@@ -656,16 +657,20 @@ bool on_baker_draw(reshade::api::command_list *command_list, std::uint32_t verte
     const auto *state = command_list->get_private_data<BakerCommandState>();
     neuralpass::d3d11_capture::UvSemantic uv;
     neuralpass::d3d11_capture::SurfaceCapture *capture = nullptr;
+    int source_override = -1;
     {
         std::lock_guard lock(g_baker_probe_mutex);
         if (const auto found = g_vertex_uv_outputs.find(state->vertex_pipeline.handle);
             found != g_vertex_uv_outputs.end()) uv = found->second;
         if (const auto found = g_d3d11_captures.find(command_list->get_device());
             found != g_d3d11_captures.end()) capture = found->second.get();
+        if (const auto found = g_source_slot_overrides.find(material.value);
+            found != g_source_slot_overrides.end()) source_override = found->second;
     }
     return capture != nullptr && uv.valid() && capture->draw(
         reinterpret_cast<ID3D11DeviceContext *>(command_list->get_native()), uv,
-        material.value, vertex_count, instance_count, first_vertex, first_instance);
+        material.value, vertex_count, instance_count, first_vertex, first_instance,
+        source_override);
 }
 
 bool on_baker_draw_indexed(reshade::api::command_list *command_list,
@@ -678,17 +683,20 @@ bool on_baker_draw_indexed(reshade::api::command_list *command_list,
     const auto *state = command_list->get_private_data<BakerCommandState>();
     neuralpass::d3d11_capture::UvSemantic uv;
     neuralpass::d3d11_capture::SurfaceCapture *capture = nullptr;
+    int source_override = -1;
     {
         std::lock_guard lock(g_baker_probe_mutex);
         if (const auto found = g_vertex_uv_outputs.find(state->vertex_pipeline.handle);
             found != g_vertex_uv_outputs.end()) uv = found->second;
         if (const auto found = g_d3d11_captures.find(command_list->get_device());
             found != g_d3d11_captures.end()) capture = found->second.get();
+        if (const auto found = g_source_slot_overrides.find(material.value);
+            found != g_source_slot_overrides.end()) source_override = found->second;
     }
     return capture != nullptr && uv.valid() && capture->draw_indexed(
         reinterpret_cast<ID3D11DeviceContext *>(command_list->get_native()), uv,
         material.value, index_count, instance_count, first_index, vertex_offset,
-        first_instance);
+        first_instance, source_override);
 }
 
 struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
@@ -720,6 +728,8 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::atomic_uint64_t active_scene_identity = 0;
     std::atomic_uint64_t scene_generation = 1;
     std::atomic_int scene_transition = static_cast<int>(neuralpass::SceneTransition::stable);
+    std::uint64_t selected_binding = 0;
+    int selected_source_slot = -1;
     std::atomic_int requested_preset = 0;
     std::array<char, 512> prompt {};
     std::vector<std::string> prompt_history;
@@ -1611,10 +1621,13 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         static_cast<unsigned long long>(g_pretransform_probe_attempts.load()),
         static_cast<unsigned long long>(g_pretransform_uv_samples.load()));
     std::size_t material_count = 0;
+    std::vector<std::uint64_t> material_ids;
     {
         std::lock_guard lock(g_baker_probe_mutex);
         material_count = g_materials_seen.size();
+        material_ids.assign(g_materials_seen.begin(), g_materials_seen.end());
     }
+    std::sort(material_ids.begin(), material_ids.end());
     ImGui::Text("Material-bound UV draws: %llu  Unique material fingerprints: %llu",
         static_cast<unsigned long long>(g_material_draws_seen.load()),
         static_cast<unsigned long long>(material_count));
@@ -1623,6 +1636,47 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         static_cast<unsigned long long>(g_session_material_draws.load()));
     ImGui::Text("Persistent texture candidates sampled: %llu",
         static_cast<unsigned long long>(g_material_texture_candidates.load()));
+    if (!material_ids.empty()) {
+        if (state->selected_binding == 0 ||
+            !std::binary_search(material_ids.begin(), material_ids.end(), state->selected_binding)) {
+            state->selected_binding = material_ids.front();
+            std::lock_guard lock(g_baker_probe_mutex);
+            const auto known = g_source_slot_overrides.find(state->selected_binding);
+            state->selected_source_slot = known == g_source_slot_overrides.end()
+                ? -1 : known->second;
+        }
+        const auto preview = std::to_string(state->selected_binding);
+        if (ImGui::BeginCombo("Binding override", preview.c_str())) {
+            for (const auto binding : material_ids) {
+                const auto label = std::to_string(binding);
+                const bool selected = binding == state->selected_binding;
+                if (ImGui::Selectable(label.c_str(), selected)) {
+                    state->selected_binding = binding;
+                    std::lock_guard lock(g_baker_probe_mutex);
+                    const auto known = g_source_slot_overrides.find(binding);
+                    state->selected_source_slot = known == g_source_slot_overrides.end()
+                        ? -1 : known->second;
+                }
+                if (selected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SliderInt("Forced source SRV slot (-1 = auto)",
+                         &state->selected_source_slot, -1, 127);
+        if (ImGui::Button("Apply source slot")) {
+            std::lock_guard lock(g_baker_probe_mutex);
+            if (state->selected_source_slot < 0)
+                g_source_slot_overrides.erase(state->selected_binding);
+            else
+                g_source_slot_overrides[state->selected_binding] = state->selected_source_slot;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Use automatic source")) {
+            std::lock_guard lock(g_baker_probe_mutex);
+            g_source_slot_overrides.erase(state->selected_binding);
+            state->selected_source_slot = -1;
+        }
+    }
     std::uint64_t replayed_draws = 0;
     std::uint64_t capture_drops = 0;
     {

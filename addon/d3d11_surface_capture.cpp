@@ -99,7 +99,8 @@ bool color_sample_format(DXGI_FORMAT format) {
     }
 }
 
-SourceBinding select_source_binding(ID3D11DeviceContext *context) {
+SourceBinding select_source_binding(ID3D11DeviceContext *context,
+                                    int texture_override) {
     std::array<ID3D11ShaderResourceView *, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT> views {};
     std::array<ID3D11SamplerState *, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT> samplers {};
     context->PSGetShaderResources(0, static_cast<UINT>(views.size()), views.data());
@@ -129,7 +130,12 @@ SourceBinding select_source_binding(ID3D11DeviceContext *context) {
         score += static_cast<std::uint64_t>(desc.MipLevels) << 24;
         if ((desc.BindFlags & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_DEPTH_STENCIL)) == 0)
             score += std::uint64_t {1} << 56;
-        if (score > best_score) { best_score = score; best_slot = static_cast<int>(slot); }
+        if (texture_override >= 0) {
+            if (static_cast<int>(slot) == texture_override) best_slot = texture_override;
+        } else if (score > best_score) {
+            best_score = score;
+            best_slot = static_cast<int>(slot);
+        }
     }
     int sampler_slot = -1;
     if (best_slot >= 0 && best_slot < static_cast<int>(samplers.size()) &&
@@ -279,7 +285,7 @@ struct SurfaceCapture::Impl {
 
     template <typename Draw>
     bool replay(ID3D11DeviceContext *context, const UvSemantic &uv,
-                std::uint64_t material_id, Draw &&draw) {
+                std::uint64_t material_id, int source_texture_override, Draw &&draw) {
         if (context == nullptr || target_view == nullptr || !uv.valid() || material_id == 0)
             return false;
         D3D11_DEVICE_CONTEXT_TYPE type = context->GetType();
@@ -324,7 +330,7 @@ struct SurfaceCapture::Impl {
         UINT stencil_reference = 0;
         context->OMGetDepthStencilState(&original_depth, &stencil_reference);
 
-        const auto source_binding = select_source_binding(context);
+        const auto source_binding = select_source_binding(context, source_texture_override);
         auto *capture_shader = shader(uv, material_id, source_binding);
         auto *capture_depth_state = capture_depth(original_depth);
         if (capture_shader != nullptr && (original_depth == nullptr || capture_depth_state != nullptr)) {
@@ -507,9 +513,10 @@ std::uint32_t SurfaceCapture::height() const noexcept {
 bool SurfaceCapture::draw(ID3D11DeviceContext *context, const UvSemantic &uv,
                           std::uint64_t material_id, std::uint32_t vertex_count,
                           std::uint32_t instance_count, std::uint32_t first_vertex,
-                          std::uint32_t first_instance) {
+                          std::uint32_t first_instance,
+                          int source_texture_override) {
     if (impl_ == nullptr) return false;
-    return impl_->replay(context, uv, material_id, [&] {
+    return impl_->replay(context, uv, material_id, source_texture_override, [&] {
         context->DrawInstanced(vertex_count, instance_count, first_vertex, first_instance);
     });
 }
@@ -518,9 +525,10 @@ bool SurfaceCapture::draw_indexed(ID3D11DeviceContext *context, const UvSemantic
                                   std::uint64_t material_id, std::uint32_t index_count,
                                   std::uint32_t instance_count, std::uint32_t first_index,
                                   std::int32_t vertex_offset,
-                                  std::uint32_t first_instance) {
+                                  std::uint32_t first_instance,
+                                  int source_texture_override) {
     if (impl_ == nullptr) return false;
-    return impl_->replay(context, uv, material_id, [&] {
+    return impl_->replay(context, uv, material_id, source_texture_override, [&] {
         context->DrawIndexedInstanced(index_count, instance_count, first_index,
                                       vertex_offset, first_instance);
     });

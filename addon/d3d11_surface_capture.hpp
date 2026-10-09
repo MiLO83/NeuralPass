@@ -40,12 +40,14 @@ public:
     [[nodiscard]] bool draw(ID3D11DeviceContext *context, const UvSemantic &uv,
                             std::uint64_t material_id, std::uint32_t vertex_count,
                             std::uint32_t instance_count, std::uint32_t first_vertex,
-                            std::uint32_t first_instance);
+                            std::uint32_t first_instance,
+                            int source_texture_override = -1);
     [[nodiscard]] bool draw_indexed(ID3D11DeviceContext *context, const UvSemantic &uv,
                                     std::uint64_t material_id, std::uint32_t index_count,
                                     std::uint32_t instance_count, std::uint32_t first_index,
                                     std::int32_t vertex_offset,
-                                    std::uint32_t first_instance);
+                                    std::uint32_t first_instance,
+                                    int source_texture_override = -1);
 
     // Polls completed staging copies without flushing or waiting, then queues
     // the current surface into a free ring slot and clears it for the next frame.

@@ -56,6 +56,13 @@ invalid UVs, failed depth tests, and uncovered texels retain the live
 screen-space result. The magenta atlas initialization is therefore diagnostic
 state only and is never reconstructed into the presented framebuffer.
 
+The D3D11 adapter ranks currently bound sampleable color SRVs as likely base
+color sources. Because shader resource layouts are application-defined, the
+overlay also stores a session-local SRV-slot override for each stable
+pipeline-plus-descriptor binding. The capture replay samples only the forced
+slot when an override is active and emits no source observation if that slot is
+not a compatible texture/sampler pair.
+
 The local/world RGB8 planes produced by the StreamDiffusion bridge are optical-
 flow coordinates into a prior screen image. They stabilize live generation but
 are deliberately not treated as mesh UVs. A graphics adapter must provide a
