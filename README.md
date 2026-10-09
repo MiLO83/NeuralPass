@@ -168,6 +168,13 @@ Windows WARP test covers indexed and non-indexed replay, derivative capture,
 and state restoration. Capture frames and framebuffer frames are paired by GPU
 sequence number before reveal-only atlas generation.
 
+Binding identity includes shader bytecode, pixel-resource slot/content
+fingerprints, input-layout semantics, and bound vertex/index-buffer topology.
+Immutable geometry uploads are restart-stable. Once a geometry buffer is
+updated, its identity becomes handle-backed and session-only, preventing
+animated buffers from creating a new persistent atlas on every update while
+also preventing unsafe cross-launch reuse.
+
 For D3D11 RGBA8/BGRA8 Texture2D sources, completed atlas snapshots are assembled
 into real per-binding replacement textures. Each replacement begins as a GPU
 copy of the selected source; only covered atlas runs are patched, using the

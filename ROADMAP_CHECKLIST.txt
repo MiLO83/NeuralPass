@@ -63,7 +63,10 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [x] Implement confidence-weighted elliptical UV splatting.
     Evidence: bounded anisotropic-footprint and confidence-accumulation core test;
     D3D11 WARP verifies captured screen-space UV derivatives.
-[ ] Isolate UV islands, overlapping layers, bindings, and materials.
+[~] Isolate UV islands, overlapping layers, bindings, and materials.
+    Evidence: material keys now include pipeline/input-layout, descriptor slots,
+    source contents, and immutable vertex/index topology; overlapping UV layers
+    within one draw still need primitive/island identity.
 [~] Preserve source alpha and original pixels outside style coverage.
     Evidence: source-aware transfer preserves texture alpha and framebuffer reconstruction
     retains fallback outside coverage; D3D11 rejects fully transparent selected-source
@@ -120,8 +123,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 5. PERSISTENCE AND MIGRATION
 ----------------------------
 [~] Namespace caches by game build, scene, style, model, binding, source, and UV topology.
-    Evidence: persistent scene and pipeline-plus-descriptor binding namespaces implemented;
-    game/style/model/source/UV-topology dimensions remain.
+    Evidence: persistent scene namespaces and binding keys now include shader/layout,
+    descriptor/source content, and immutable vertex/index topology; mutable geometry
+    is safely session-only. Game-build, style, and model dimensions remain.
 [ ] Double-buffer style generations during prompt/model changes.
 [ ] Migrate compatible identities and coverage after game updates.
 [ ] Quarantine ambiguous migrations for manual reassignment.

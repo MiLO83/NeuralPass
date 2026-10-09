@@ -117,6 +117,13 @@ restart-stable material keys when upload contents are observable. Descriptor or
 resource handles are used only to avoid collisions inside the current process;
 those keys are never admitted to the cross-launch atlas store.
 
+The binding key also includes input-layout state and every bound vertex/index
+buffer's content fingerprint, offset, and stride/index size. This separates
+meshes that reuse the same material resources but carry different UV topology.
+An immutable initial upload is restart-stable; observing a buffer update converts
+that resource to a handle-backed session identity so deforming or streamed
+geometry neither pollutes a cross-launch cache nor creates one identity per frame.
+
 ### D3D11 replay adapter
 
 The first live adapter uses draw replay rather than modifying the game's pixel

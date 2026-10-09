@@ -312,21 +312,49 @@ std::uint64_t resource_descriptor_fingerprint(const reshade::api::resource_desc 
 void on_baker_init_resource(reshade::api::device *, const reshade::api::resource_desc &desc,
                             const reshade::api::subresource_data *initial_data,
                             reshade::api::resource_usage, reshade::api::resource resource) {
-    if (desc.type != reshade::api::resource_type::texture_1d &&
+    if (desc.type != reshade::api::resource_type::buffer &&
+        desc.type != reshade::api::resource_type::texture_1d &&
         desc.type != reshade::api::resource_type::texture_2d &&
         desc.type != reshade::api::resource_type::texture_3d) return;
     ResourceFingerprint fingerprint {resource_descriptor_fingerprint(desc), false};
     if (initial_data != nullptr && initial_data[0].data != nullptr) {
-        const auto row_pitch = initial_data[0].row_pitch != 0 ? initial_data[0].row_pitch :
-            reshade::api::format_row_pitch(desc.texture.format, desc.texture.width);
-        const auto slice_pitch = initial_data[0].slice_pitch != 0 ? initial_data[0].slice_pitch :
-            reshade::api::format_slice_pitch(desc.texture.format, row_pitch,
-                                             std::max(1u, desc.texture.height));
-        hash_bytes(fingerprint.value, initial_data[0].data, slice_pitch);
-        fingerprint.content_backed = slice_pitch != 0;
+        if (desc.type == reshade::api::resource_type::buffer) {
+            hash_bytes(fingerprint.value, initial_data[0].data,
+                       static_cast<std::size_t>(desc.buffer.size));
+            fingerprint.content_backed = desc.buffer.size != 0;
+        } else {
+            const auto row_pitch = initial_data[0].row_pitch != 0 ? initial_data[0].row_pitch :
+                reshade::api::format_row_pitch(desc.texture.format, desc.texture.width);
+            const auto slice_pitch = initial_data[0].slice_pitch != 0 ? initial_data[0].slice_pitch :
+                reshade::api::format_slice_pitch(desc.texture.format, row_pitch,
+                                                 std::max(1u, desc.texture.height));
+            hash_bytes(fingerprint.value, initial_data[0].data, slice_pitch);
+            fingerprint.content_backed = slice_pitch != 0;
+        }
     }
     std::lock_guard lock(g_baker_probe_mutex);
     g_resource_fingerprints[resource.handle] = fingerprint;
+}
+
+bool on_baker_update_buffer(reshade::api::device *device, const void *,
+                            reshade::api::resource destination, std::uint64_t,
+                            std::uint64_t) {
+    const auto desc = device->get_resource_desc(destination);
+    if (desc.type != reshade::api::resource_type::buffer) return false;
+    ResourceFingerprint fingerprint {resource_descriptor_fingerprint(desc), false};
+    // Mutable geometry cannot be a restart-stable topology identity. Keep one
+    // session identity per live resource rather than hashing every animation update.
+    hash_value(fingerprint.value, destination.handle);
+    std::lock_guard lock(g_baker_probe_mutex);
+    g_resource_fingerprints[destination.handle] = fingerprint;
+    return false;
+}
+
+bool on_baker_update_buffer_command(reshade::api::command_list *command_list,
+                                    const void *data, reshade::api::resource destination,
+                                    std::uint64_t offset, std::uint64_t size) {
+    return on_baker_update_buffer(
+        command_list->get_device(), data, destination, offset, size);
 }
 
 bool on_baker_update_texture(reshade::api::device *device,
@@ -479,7 +507,7 @@ void on_baker_bind_descriptor_tables(reshade::api::command_list *command_list,
 neuralpass::BindingInstanceKey current_material_id(reshade::api::device *device,
                                                    const BakerCommandState &state) {
     std::vector<neuralpass::DescriptorIdentity> resources;
-    resources.reserve(state.pixel_resources.size());
+    resources.reserve(state.pixel_resources.size() + state.vertex_buffers.size() + 1);
     for (const auto &[slot, handle] : state.pixel_resources) {
         if (handle == 0) continue;
         const reshade::api::resource_view view {handle};
@@ -511,8 +539,36 @@ neuralpass::BindingInstanceKey current_material_id(reshade::api::device *device,
         }
         resources.push_back({slot, fingerprint.value, fingerprint.content_backed});
     }
-    if (resources.empty()) return {};
-    g_material_texture_candidates += resources.size();
+    const auto texture_resource_count = resources.size();
+    if (texture_resource_count == 0) return {};
+    constexpr std::uint64_t k_vertex_slot_base = 0xfffd000000000000ull;
+    constexpr std::uint64_t k_index_slot = 0xfffe000000000000ull;
+    auto append_geometry = [&](reshade::api::resource resource, std::uint64_t slot,
+                               std::uint64_t offset, std::uint32_t stride_or_index_size) {
+        if (resource == 0) return;
+        ResourceFingerprint fingerprint;
+        {
+            std::lock_guard lock(g_baker_probe_mutex);
+            const auto known = g_resource_fingerprints.find(resource.handle);
+            if (known != g_resource_fingerprints.end()) fingerprint = known->second;
+        }
+        if (fingerprint.value == 0) {
+            const auto desc = device->get_resource_desc(resource);
+            if (desc.type != reshade::api::resource_type::buffer) return;
+            fingerprint.value = resource_descriptor_fingerprint(desc);
+            hash_value(fingerprint.value, resource.handle);
+        }
+        hash_value(fingerprint.value, offset);
+        hash_value(fingerprint.value, stride_or_index_size);
+        resources.push_back({slot, fingerprint.value, fingerprint.content_backed});
+    };
+    for (std::size_t binding = 0; binding < state.vertex_buffers.size(); ++binding) {
+        const auto &vertex = state.vertex_buffers[binding];
+        append_geometry(vertex.buffer, k_vertex_slot_base + binding,
+                        vertex.offset, vertex.stride);
+    }
+    append_geometry(state.index_buffer, k_index_slot, state.index_offset, state.index_size);
+    g_material_texture_candidates += texture_resource_count;
     std::vector<std::uint64_t> pipelines;
     bool complete_pipeline = true;
     {
@@ -1927,6 +1983,8 @@ extern "C" __declspec(dllexport) bool AddonInit(HMODULE addon_module, HMODULE re
     reshade::register_event<reshade::addon_event::destroy_pipeline>(on_baker_destroy_pipeline);
     reshade::register_event<reshade::addon_event::init_resource>(on_baker_init_resource);
     reshade::register_event<reshade::addon_event::destroy_resource>(on_baker_destroy_resource);
+    reshade::register_event<reshade::addon_event::update_buffer_region>(on_baker_update_buffer);
+    reshade::register_event<reshade::addon_event::update_buffer_region_command>(on_baker_update_buffer_command);
     reshade::register_event<reshade::addon_event::update_texture_region>(on_baker_update_texture);
     reshade::register_event<reshade::addon_event::init_command_list>(on_baker_init_command_list);
     reshade::register_event<reshade::addon_event::destroy_command_list>(on_baker_destroy_command_list);
