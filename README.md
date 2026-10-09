@@ -204,7 +204,8 @@ backend without starting the game.
   correspondence around transparent texels.
 - D3D11 base-color selection is heuristic. If an unusual material layout selects
   a normal/emissive texture, use the per-binding source-SRV override in the overlay;
-  these overrides are currently session-local.
+  overrides persist in the game's ReShade configuration when the binding identity
+  is restart-stable, while handle-derived bindings remain safely session-local.
 - v0.1 supports SDR RGBA8 capture. HDR/scRGB is not processed correctly yet.
 - The screen-space fallback cannot follow large camera motion as accurately as
   engine motion vectors; changed pixels are invalidated and restyled instead.

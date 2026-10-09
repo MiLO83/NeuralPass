@@ -89,8 +89,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [~] Implement aggressive base-color binding selection and manual correction.
     Evidence: D3D11 ranks bound sampleable 2D color SRVs and captures the selected
     source texel with its sampler; the overlay provides a per-binding SRV-slot
-    override and the WARP test proves that forcing a second bound texture works.
-    Equivalent selection/correction remains for the other API adapters.
+    override, persists restart-stable corrections in the per-game ReShade config,
+    and the WARP test proves that forcing a second bound texture works. Equivalent
+    selection/correction remains for the other API adapters.
 [ ] Add per-binding circuit breakers and accurate unsupported-path reporting.
 
 4. MANAGED NEURAL RUNTIME

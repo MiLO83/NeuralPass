@@ -101,8 +101,36 @@ std::atomic_uint64_t g_surface_pixels_captured = 0;
 std::unordered_set<std::uint64_t> g_materials_seen;
 std::unordered_set<std::uint64_t> g_restart_stable_materials;
 std::unordered_map<std::uint64_t, int> g_source_slot_overrides;
+std::unordered_set<std::uint64_t> g_source_overrides_loaded;
 std::unordered_map<reshade::api::device *,
     std::unique_ptr<neuralpass::d3d11_capture::SurfaceCapture>> g_d3d11_captures;
+
+constexpr char k_source_slot_section[] = "NeuralPass.SourceSlots";
+
+std::string source_slot_key(std::uint64_t binding) {
+    return std::to_string(binding);
+}
+
+void persist_source_slot(std::uint64_t binding, int slot) {
+    const auto key = source_slot_key(binding);
+    reshade::set_config_value(nullptr, k_source_slot_section, key.c_str(), slot);
+}
+
+void load_source_slot_once(std::uint64_t binding) {
+    bool should_load = false;
+    {
+        std::lock_guard lock(g_baker_probe_mutex);
+        should_load = g_source_overrides_loaded.insert(binding).second;
+    }
+    if (!should_load) return;
+    int slot = -1;
+    const auto key = source_slot_key(binding);
+    if (reshade::get_config_value(nullptr, k_source_slot_section, key.c_str(), slot) &&
+        slot >= 0 && slot < static_cast<int>(D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT)) {
+        std::lock_guard lock(g_baker_probe_mutex);
+        g_source_slot_overrides[binding] = slot;
+    }
+}
 
 struct BakerVertexBinding {
     reshade::api::resource buffer = {};
@@ -636,8 +664,11 @@ neuralpass::BindingInstanceKey record_baker_draw(
             ++g_material_draws_seen;
             if (material.restart_stable) {
                 ++g_restart_stable_material_draws;
-                std::lock_guard lock(g_baker_probe_mutex);
-                g_restart_stable_materials.insert(material.value);
+                {
+                    std::lock_guard lock(g_baker_probe_mutex);
+                    g_restart_stable_materials.insert(material.value);
+                }
+                load_source_slot_once(material.value);
             }
             else ++g_session_material_draws;
             std::lock_guard lock(g_baker_probe_mutex);
@@ -1663,19 +1694,34 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         }
         ImGui::SliderInt("Forced source SRV slot (-1 = auto)",
                          &state->selected_source_slot, -1, 127);
-        if (ImGui::Button("Apply source slot")) {
+        bool persistent_binding = false;
+        {
             std::lock_guard lock(g_baker_probe_mutex);
-            if (state->selected_source_slot < 0)
-                g_source_slot_overrides.erase(state->selected_binding);
-            else
-                g_source_slot_overrides[state->selected_binding] = state->selected_source_slot;
+            persistent_binding = g_restart_stable_materials.contains(state->selected_binding);
+        }
+        if (ImGui::Button("Apply source slot")) {
+            {
+                std::lock_guard lock(g_baker_probe_mutex);
+                if (state->selected_source_slot < 0)
+                    g_source_slot_overrides.erase(state->selected_binding);
+                else
+                    g_source_slot_overrides[state->selected_binding] = state->selected_source_slot;
+            }
+            if (persistent_binding)
+                persist_source_slot(state->selected_binding, state->selected_source_slot);
         }
         ImGui::SameLine();
         if (ImGui::Button("Use automatic source")) {
-            std::lock_guard lock(g_baker_probe_mutex);
-            g_source_slot_overrides.erase(state->selected_binding);
+            {
+                std::lock_guard lock(g_baker_probe_mutex);
+                g_source_slot_overrides.erase(state->selected_binding);
+            }
             state->selected_source_slot = -1;
+            if (persistent_binding) persist_source_slot(state->selected_binding, -1);
         }
+        ImGui::TextDisabled(persistent_binding ?
+            "Override persists for this restart-stable binding." :
+            "This binding is session-only; its override cannot safely persist.");
     }
     std::uint64_t replayed_draws = 0;
     std::uint64_t capture_drops = 0;

@@ -58,8 +58,10 @@ state only and is never reconstructed into the presented framebuffer.
 
 The D3D11 adapter ranks currently bound sampleable color SRVs as likely base
 color sources. Because shader resource layouts are application-defined, the
-overlay also stores a session-local SRV-slot override for each stable
-pipeline-plus-descriptor binding. The capture replay samples only the forced
+overlay also stores an SRV-slot override for each pipeline-plus-descriptor
+binding. Overrides backed by stable shader and texture fingerprints persist in
+the game's ReShade configuration; handle-derived identities remain session-local
+to avoid leaking a correction to an unrelated resource after restart. The replay samples only the forced
 slot when an override is active and emits no source observation if that slot is
 not a compatible texture/sampler pair.
 
