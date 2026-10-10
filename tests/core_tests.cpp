@@ -1,3 +1,4 @@
+#include "neuralpass/adaptive_budget.hpp"
 #include "neuralpass/temporal.hpp"
 #include "neuralpass/binding_identity.hpp"
 #include "neuralpass/color_pipeline.hpp"
@@ -113,6 +114,54 @@ static void test_newly_visible_tiles_preempt_initial_styling() {
     require(jobs.size() == 1 && jobs[0].core.x == 256 &&
             jobs[0].urgent_fraction > 0.0f,
             "newly visible inpaint did not preempt bulk first-observation styling");
+}
+
+static void test_adaptive_budget_sheds_pressure_and_recovers_slowly() {
+    AdaptiveTileBudgetController controller({
+        .minimum_budget=0, .maximum_budget=4, .target_frame_time_ms=10.0f,
+        .recovery_samples=3});
+    controller.reset(3);
+
+    auto decision = controller.observe({
+        .frame_time_ms=12.0f, .worker_time_ms=18.0f,
+        .attempted_tiles=3, .capture_backlog=false});
+    require(decision.tile_budget == 2 && decision.under_pressure && decision.changed,
+            "slow frame did not immediately shed one tile");
+    decision = controller.observe({
+        .frame_time_ms=8.0f, .worker_time_ms=0.0f,
+        .attempted_tiles=0, .capture_backlog=true});
+    require(decision.tile_budget == 1 && decision.under_pressure,
+            "capture backlog did not reduce asynchronous work");
+    decision = controller.observe({
+        .frame_time_ms=8.0f, .worker_time_ms=8.0f,
+        .attempted_tiles=1, .capture_backlog=false});
+    require(decision.tile_budget <= 1,
+            "controller recovered without sustained headroom");
+    decision = controller.observe({
+        .frame_time_ms=8.0f, .capture_backlog=true});
+    require(decision.tile_budget == 0,
+            "sustained pressure did not suspend inference");
+
+    controller.reset(0);
+    for (int sample = 0; sample < 2; ++sample)
+        decision = controller.observe({.frame_time_ms=8.0f});
+    require(decision.tile_budget == 0,
+            "suspended controller probed before its recovery window");
+    decision = controller.observe({.frame_time_ms=8.0f});
+    require(decision.tile_budget == 1 && decision.changed,
+            "suspended controller did not probe after sustained headroom");
+}
+
+static void test_adaptive_budget_rejects_invalid_configuration() {
+    bool rejected = false;
+    try {
+        AdaptiveTileBudgetController controller({
+            .minimum_budget=3, .maximum_budget=2});
+        (void)controller;
+    } catch (const std::invalid_argument &) {
+        rejected = true;
+    }
+    require(rejected, "inverted adaptive-budget bounds were accepted");
 }
 
 static void test_preview_backend_is_bounded() {
@@ -916,6 +965,8 @@ int main() {
         test_dilation_and_priority();
         test_age_refresh();
         test_newly_visible_tiles_preempt_initial_styling();
+        test_adaptive_budget_sheds_pressure_and_recovers_slowly();
+        test_adaptive_budget_rejects_invalid_configuration();
         test_preview_backend_is_bounded();
         test_hdr_color_contract_is_bounded_and_luminance_stable();
         test_runtime_display_evidence_json_is_exact_and_escaped();

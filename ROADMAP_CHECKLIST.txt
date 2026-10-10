@@ -195,11 +195,16 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     receive an explicit urgent scheduling lane ahead of bulk first-observation work;
     core tests prove mask separation, reject overlap/tampering, and verify preemption.
 [ ] Add global prompt and per-binding controls.
-[~] Add adaptive frame-time/GPU-headroom control and worker crash recovery.
+[x] Add adaptive frame-time/GPU-headroom control and worker crash recovery.
     Evidence: broken worker transports are restarted and retried once; x64 and
     x86-to-x64 integration suites force process exit during a request and prove a
     fresh child completes the retried tile. The same recovery workload ships as a
-    JSON-producing x64/x86 worker-health validator. Adaptive GPU-headroom control remains.
+    JSON-producing x64/x86 worker-health validator. The add-on now uses smoothed
+    frame cadence, per-tile inference cost, and capture backlog as a portable
+    headroom proxy: overload sheds work immediately down to zero, while recovery
+    requires 30 healthy observations. Portable tests prove pressure response,
+    suspension, hysteresis, recovery, and invalid-setting rejection; the overlay
+    and shutdown probe expose the live controller state.
 [x] Pin model versions, licenses, and SHA-256 hashes.
     Evidence: schema-validated manifest pins four model URLs/versioned filenames,
     BSD-3-Clause licenses, and exact SHA-256 values; downloads fail closed.

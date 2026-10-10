@@ -14,6 +14,7 @@ set(NEURALPASS_EXTERNAL_WORKER "" CACHE FILEPATH "Optional x64 NeuralPassWorker.
 set(VULKAN_HEADERS_DIR "" CACHE PATH "Optional Vulkan-Headers checkout for native runtime tests")
 
 add_library(neuralpass_core STATIC
+    src/adaptive_budget.cpp
     src/atlas_cache.cpp
     src/binding_identity.cpp
     src/cache_namespace.cpp

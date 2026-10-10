@@ -353,6 +353,16 @@ their union exactly matches the original reveal boundary before accepting any
 pixel, so ordinary camera motion never restyles established material texels and
 unsupported pixels remain on the live screen-space fallback.
 
+Tile admission is governed by an asymmetric frame-time controller in the worker.
+The render callback only records cadence and submits bounded readbacks; it never
+waits for inference. A missed target, expensive tile near the target, or dropped
+capture backlog removes one admitted tile immediately, down to zero. Recovery is
+deliberately slower: 30 consecutive observations below 90% of the target admit
+one additional tile, and a suspended worker probes with one tile first. This is
+a conservative GPU-headroom proxy rather than a vendor-specific utilization
+query, so it works identically for x64 in-process and x86-to-x64 worker paths.
+Newly-visible inpainting retains priority within whatever budget is admitted.
+
 Every asynchronous plan carries both a baker epoch and scene key. An image-space
 cut bumps the epoch immediately, resets optical-flow/temporal history, and
 rejects older in-flight results. A bounded scene profile then classifies the

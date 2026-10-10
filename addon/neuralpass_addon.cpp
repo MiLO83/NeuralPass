@@ -8,6 +8,7 @@
 #include "d3d11_surface_capture.hpp"
 #include "d3d12_surface_capture.hpp"
 #include "vulkan_surface_capture.hpp"
+#include "neuralpass/adaptive_budget.hpp"
 #include "neuralpass/binding_identity.hpp"
 #include "neuralpass/cache_namespace.hpp"
 #include "neuralpass/color_pipeline.hpp"
@@ -1295,6 +1296,13 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::atomic_uint64_t dropped = 0;
     std::array<std::atomic_uint64_t, 6> visibility_counts {};
     std::atomic_uint32_t tile_budget = 2;
+    std::atomic_uint32_t effective_tile_budget = 1;
+    std::atomic_uint32_t target_frame_rate = 60;
+    std::atomic_bool adaptive_tile_budget = true;
+    std::atomic_uint64_t measured_frame_time_us = 0;
+    std::atomic_uint64_t measured_tile_time_us = 0;
+    std::atomic_uint64_t budget_pressure_events = 0;
+    std::chrono::steady_clock::time_point last_effect_time {};
     std::atomic_uint32_t refresh_age = 120;
     std::atomic_bool reset_requested = false;
     std::atomic_bool sticky_history = true;
@@ -1724,6 +1732,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
     std::optional<neuralpass::SurfaceCaptureFrame> previous_surface;
     std::unordered_set<std::uint64_t> published_replacements;
     std::uint64_t style_generation = 1;
+    neuralpass::AdaptiveTileBudgetController budget_controller;
+    bool adaptive_was_enabled = true;
 
     while (!token.stop_requested()) {
         CapturedFrame frame;
@@ -1737,6 +1747,7 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             state->pending_surface.reset();
             state->has_pending = false;
         }
+        const auto dropped_before_processing = state->dropped.load();
         const bool requested_stream = state->stream_bridge.load();
         const auto requested_prompt_identity = state->prompt_identity.load();
         if (requested_stream != active_stream ||
@@ -2001,9 +2012,19 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         Image<std::uint8_t> dirty(frame.width, frame.height, 0);
         for (std::size_t i = 0; i < dirty.size(); ++i)
             dirty.pixels()[i] = history.valid.pixels()[i] ? 0 : 1;
+        const auto maximum_tile_budget = state->tile_budget.load();
+        const bool adaptive_budget = state->adaptive_tile_budget.load();
+        if (adaptive_budget && !adaptive_was_enabled) {
+            budget_controller.reset(std::min<std::uint32_t>(1, maximum_tile_budget));
+        }
+        adaptive_was_enabled = adaptive_budget;
+        const auto admitted_tile_budget = adaptive_budget
+            ? std::min(budget_controller.budget(), maximum_tile_budget)
+            : maximum_tile_budget;
+        state->effective_tile_budget = admitted_tile_budget;
         const auto jobs = neuralpass::schedule_tiles(dirty, history.age,
             {.tile_size=256, .halo=32, .dilation_radius=4,
-             .tile_budget=state->tile_budget.load(),
+             .tile_budget=admitted_tile_budget,
              .refresh_age=static_cast<std::uint16_t>(state->refresh_age.load())},
             &bake_plan.inpaint_mask);
 
@@ -2022,6 +2043,7 @@ void process_frames(RuntimeState *state, std::stop_token token) {
                                   style_generation,
                                   binding_generation});
 
+        const auto inference_started = std::chrono::steady_clock::now();
         for (const auto &job : jobs) {
             try {
                 const auto input = extract(current, job.padded);
@@ -2040,6 +2062,30 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             } catch (const std::exception &error) {
                 reshade::log::message(reshade::log::level::error, error.what());
             }
+        }
+        const auto inference_elapsed = std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - inference_started).count();
+        if (adaptive_budget) {
+            const auto target_fps = std::clamp(state->target_frame_rate.load(), 30u, 240u);
+            budget_controller.configure({
+                .minimum_budget=0,
+                .maximum_budget=maximum_tile_budget,
+                .target_frame_time_ms=1000.0f / static_cast<float>(target_fps),
+                .recovery_samples=30});
+            const auto decision = budget_controller.observe({
+                .frame_time_ms=static_cast<float>(state->measured_frame_time_us.load()) / 1000.0f,
+                .worker_time_ms=inference_elapsed,
+                .attempted_tiles=static_cast<std::uint32_t>(jobs.size()),
+                .capture_backlog=state->dropped.load() != dropped_before_processing});
+            state->effective_tile_budget = decision.tile_budget;
+            state->measured_tile_time_us = static_cast<std::uint64_t>(
+                std::max(0.0f, decision.smoothed_tile_time_ms) * 1000.0f);
+            if (decision.under_pressure) ++state->budget_pressure_events;
+        } else {
+            state->effective_tile_budget = maximum_tile_budget;
+            state->measured_tile_time_us = jobs.empty() ? 0 :
+                static_cast<std::uint64_t>(inference_elapsed * 1000.0f /
+                                           static_cast<float>(jobs.size()));
         }
 
         std::vector<neuralpass::SurfaceCorrespondence> generated_reveals;
@@ -2507,7 +2553,8 @@ void on_init(reshade::api::effect_runtime *runtime) {
 }
 
 void on_destroy(reshade::api::effect_runtime *runtime) {
-    if (auto *state = runtime->get_private_data<RuntimeState>()) {
+    auto *state = runtime->get_private_data<RuntimeState>();
+    if (state != nullptr) {
         {
             std::lock_guard lock(state->mutex);
             state->stop = true;
@@ -2554,6 +2601,13 @@ void on_destroy(reshade::api::effect_runtime *runtime) {
                << "surface_frames_captured=" << g_surface_frames_captured.load() << '\n'
                << "surface_pixels_captured=" << g_surface_pixels_captured.load() << '\n'
                << "swapchain_resets=" << g_swapchain_resets.load() << '\n'
+               << "adaptive_tile_budget=" << (state != nullptr && state->adaptive_tile_budget.load()) << '\n'
+               << "maximum_tile_budget=" << (state != nullptr ? state->tile_budget.load() : 0) << '\n'
+               << "effective_tile_budget=" << (state != nullptr ? state->effective_tile_budget.load() : 0) << '\n'
+               << "target_frame_rate=" << (state != nullptr ? state->target_frame_rate.load() : 0) << '\n'
+               << "measured_frame_time_us=" << (state != nullptr ? state->measured_frame_time_us.load() : 0) << '\n'
+               << "measured_tile_time_us=" << (state != nullptr ? state->measured_tile_time_us.load() : 0) << '\n'
+               << "budget_pressure_events=" << (state != nullptr ? state->budget_pressure_events.load() : 0) << '\n'
                << "unique_materials=" << material_count << '\n';
     }
     runtime->destroy_private_data<RuntimeState>();
@@ -2563,6 +2617,15 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
                       reshade::api::resource_view rtv, reshade::api::resource_view) {
     auto *state = runtime->get_private_data<RuntimeState>();
     if (!state) return;
+    const auto effect_time = std::chrono::steady_clock::now();
+    if (state->last_effect_time.time_since_epoch().count() != 0) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+            effect_time - state->last_effect_time).count();
+        // Ignore debugger breaks, loading screens, and clock discontinuities.
+        if (elapsed >= 1000 && elapsed <= 250000)
+            state->measured_frame_time_us = static_cast<std::uint64_t>(elapsed);
+    }
+    state->last_effect_time = effect_time;
     auto *device = runtime->get_device();
     auto *queue = runtime->get_command_queue();
     const auto source = device->get_resource_from_view(rtv);
@@ -2747,6 +2810,13 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         static_cast<unsigned long long>(state->submitted.load()),
         static_cast<unsigned long long>(state->completed.load()),
         static_cast<unsigned long long>(state->dropped.load()));
+    const auto frame_time_ms = static_cast<double>(state->measured_frame_time_us.load()) / 1000.0;
+    const auto tile_time_ms = static_cast<double>(state->measured_tile_time_us.load()) / 1000.0;
+    ImGui::Text("Frame: %.2f ms  Inference/tile: %.2f ms  Active tiles: %u/%u",
+        frame_time_ms, tile_time_ms, state->effective_tile_budget.load(),
+        state->tile_budget.load());
+    ImGui::Text("Adaptive pressure observations: %llu",
+        static_cast<unsigned long long>(state->budget_pressure_events.load()));
     ImGui::Text("Visibility K:%llu D:%llu F:%llu O:%llu First:%llu Unsupported:%llu",
         static_cast<unsigned long long>(state->visibility_counts[
             static_cast<std::size_t>(neuralpass::VisibilityClass::known_visible)].load()),
@@ -2920,8 +2990,14 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         state->scene_command = static_cast<int>(ManualSceneCommand::merge_visible);
     ImGui::TextWrapped("Keep accepts quarantined bindings; Start creates an isolated cache; "
                        "Merge imports the matching visible cache into the active scene.");
+    bool adaptive_budget = state->adaptive_tile_budget.load();
+    if (ImGui::Checkbox("Adaptive frame-time budget", &adaptive_budget))
+        state->adaptive_tile_budget = adaptive_budget;
+    int target_fps = static_cast<int>(state->target_frame_rate.load());
+    if (ImGui::SliderInt("Target frame rate", &target_fps, 30, 240))
+        state->target_frame_rate = static_cast<std::uint32_t>(target_fps);
     int budget = static_cast<int>(state->tile_budget.load());
-    if (ImGui::SliderInt("Tiles per worker update", &budget, 1, 16))
+    if (ImGui::SliderInt("Maximum tiles per worker update", &budget, 1, 16))
         state->tile_budget = static_cast<std::uint32_t>(budget);
     int age = static_cast<int>(state->refresh_age.load());
     if (ImGui::SliderInt("Maximum cache age", &age, 15, 600))

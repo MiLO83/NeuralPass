@@ -14,7 +14,8 @@ framebuffer is presented.
 This repository currently contains a working **research-preview** pipeline:
 
 - deterministic temporal rejection and dirty-tile scheduling;
-- progressive two-tile-per-update bootstrap with 32-pixel inference halos;
+- progressive dirty-tile bootstrap with 32-pixel inference halos and an adaptive
+  frame-time/backlog budget;
 - an asynchronous add-on worker that never waits in the presentation path;
 - ONNX Runtime/DirectML inference when configured at build time;
 - checksum-pinned Candy, Mosaic, Rain Princess, and Udnie model downloads;
@@ -148,6 +149,12 @@ validity debug view to see which pixels currently have persistent styled data.
 
 The add-on intentionally drops capture frames when inference is behind. It
 never queues an unbounded amount of work or blocks the game waiting for a tile.
+Adaptive budgeting is enabled by default: it sheds one tile immediately when
+smoothed frame pacing misses the selected target or capture work backs up, may
+suspend inference completely under pressure, and admits a probe tile only after
+30 healthy worker observations. The overlay exposes the target frame rate,
+maximum and active tile counts, frame time, per-tile inference time, and pressure
+counter; disabling adaptation restores the selected fixed maximum.
 In the DirectML build, D3D11 uses the DirectML execution provider; other graphics
 APIs use ONNX Runtime's CPU provider until their device-loss stress gates pass.
 The x86 add-on launches the packaged x64 worker for either provider and restarts it
