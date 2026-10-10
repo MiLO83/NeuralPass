@@ -30,6 +30,18 @@ payload bounds are validated at both ends, and the response must echo the reques
 scene, style, and visible-binding generations. A disconnect causes one clean worker
 restart and retry. The ordinary x64 add-on retains its in-process ONNX path.
 
+Persistent storage is rooted below a game-build identity derived from the host
+executable name, size, and modification timestamp. Scene manifests live beneath
+that root; atlas paths then add the fixed-style identity, backend identity, and
+model-content fingerprint. A preset transition saves the outgoing namespace,
+invalidates its in-flight screen history and GPU replacements, increments the
+style generation, and loads only the incoming namespace. Binding keys below that
+point retain shader, descriptor/source, and immutable UV-topology identity.
+The legacy external diffusion bridge is deliberately excluded from cross-launch
+atlas persistence because its model is not package-versioned. Prompt identity is
+still a live style generation: changing it clears queued frames/replacements and
+rejects a late result from the preceding prompt.
+
 ## Coordinate contracts
 
 - Motion is **current pixel to previous pixel**, measured in pixels.

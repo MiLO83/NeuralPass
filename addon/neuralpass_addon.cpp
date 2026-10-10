@@ -9,6 +9,7 @@
 #include "d3d12_surface_capture.hpp"
 #include "vulkan_surface_capture.hpp"
 #include "neuralpass/binding_identity.hpp"
+#include "neuralpass/cache_namespace.hpp"
 #include "neuralpass/color_pipeline.hpp"
 #include "neuralpass/inference.hpp"
 #include "neuralpass/scene_cache.hpp"
@@ -46,6 +47,7 @@ using neuralpass::Image;
 namespace {
 
 std::filesystem::path g_addon_directory;
+std::uint64_t g_game_build_identity = 1;
 std::mutex g_baker_probe_mutex;
 constexpr std::uint64_t k_fnv_offset = 1469598103934665603ull;
 constexpr std::uint64_t k_fnv_prime = 1099511628211ull;
@@ -68,6 +70,66 @@ void hash_bytes(std::uint64_t &hash, const void *data, std::size_t size) {
 template <typename Value>
 void hash_value(std::uint64_t &hash, const Value &value) {
     hash_bytes(hash, &value, sizeof(value));
+}
+
+std::uint64_t nonzero_hash(std::uint64_t hash) {
+    return hash == 0 ? 1 : hash;
+}
+
+void hash_string(std::uint64_t &hash, std::string_view value) {
+    hash_bytes(hash, value.data(), value.size());
+}
+
+std::uint64_t file_content_identity(const std::filesystem::path &path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return 1;
+    std::uint64_t hash = k_fnv_offset;
+    std::array<char, 64 * 1024> block {};
+    while (input) {
+        input.read(block.data(), static_cast<std::streamsize>(block.size()));
+        const auto count = static_cast<std::size_t>(input.gcount());
+        hash_bytes(hash, block.data(), count);
+    }
+    return nonzero_hash(hash);
+}
+
+std::uint64_t game_build_identity() {
+    std::array<wchar_t, 32768> path_buffer {};
+    const DWORD length = GetModuleFileNameW(nullptr, path_buffer.data(),
+                                             static_cast<DWORD>(path_buffer.size()));
+    if (length == 0 || length == path_buffer.size()) return 1;
+    const std::filesystem::path path(std::wstring_view(path_buffer.data(), length));
+    std::uint64_t hash = k_fnv_offset;
+    const auto name = path.filename().wstring();
+    hash_bytes(hash, name.data(), name.size() * sizeof(wchar_t));
+    std::error_code error;
+    const auto size = std::filesystem::file_size(path, error);
+    if (!error) hash_value(hash, size);
+    error.clear();
+    const auto modified = std::filesystem::last_write_time(path, error);
+    if (!error) {
+        const auto ticks = modified.time_since_epoch().count();
+        hash_value(hash, ticks);
+    }
+    return nonzero_hash(hash);
+}
+
+neuralpass::CacheNamespace cache_namespace_for(
+        std::string_view preset, std::string_view backend_name) {
+    std::uint64_t style = k_fnv_offset;
+    hash_string(style, "fixed-style-v1");
+    hash_string(style, preset);
+    const auto model_path = g_addon_directory / "models" / "downloads" /
+                            (std::string(preset) + "-9.onnx");
+    std::uint64_t model = k_fnv_offset;
+    hash_string(model, backend_name);
+    if (std::filesystem::exists(model_path)) {
+        const auto content = file_content_identity(model_path);
+        hash_value(model, content);
+    } else {
+        hash_string(model, "builtin-preview-v1");
+    }
+    return {g_game_build_identity, nonzero_hash(style), nonzero_hash(model)};
 }
 
 struct ResourceFingerprint {
@@ -1213,6 +1275,7 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     // The packaged ONNX/preview backend must work without an external process.
     // The legacy WSL StreamDiffusion bridge is explicit opt-in.
     std::atomic_bool stream_bridge = false;
+    std::atomic_uint64_t prompt_identity = 1;
     std::atomic_int scene_command = static_cast<int>(ManualSceneCommand::none);
     std::atomic_uint64_t active_scene_identity = 0;
     std::atomic_uint64_t scene_generation = 1;
@@ -1377,6 +1440,14 @@ std::string normalized_prompt(const char *text) {
     return result;
 }
 
+std::uint64_t stream_prompt_identity(const char *text) {
+    const auto prompt = normalized_prompt(text);
+    std::uint64_t hash = k_fnv_offset;
+    hash_string(hash, "stream-prompt-v1");
+    hash_string(hash, prompt);
+    return nonzero_hash(hash);
+}
+
 void save_prompt_history(const RuntimeState &state) {
     std::error_code error;
     std::filesystem::create_directories(bridge_directory(), error);
@@ -1406,6 +1477,7 @@ void save_prompt(RuntimeState &state) {
     const auto temp = bridge_directory() / "prompt.tmp";
     const auto target = bridge_directory() / "prompt.txt";
     const auto prompt = normalized_prompt(state.prompt.data());
+    state.prompt_identity = stream_prompt_identity(prompt.c_str());
     {
         std::ofstream output(temp, std::ios::trunc);
         output << prompt;
@@ -1505,10 +1577,13 @@ void process_frames(RuntimeState *state, std::stop_token token) {
     HistoryFrame history;
     neuralpass::MaterialTextureBaker material_baker;
     neuralpass::SceneTransitionTracker scene_transitions;
-    neuralpass::SceneCacheCatalog scene_catalog(
-        g_addon_directory / "NeuralPassCache" / "scenes");
+    neuralpass::CacheNamespace active_namespace {g_game_build_identity, 1, 1};
+    neuralpass::SceneCacheCatalog scene_catalog(active_namespace.scene_catalog_root(
+        g_addon_directory / "NeuralPassCache"));
     std::optional<neuralpass::SceneCacheSelection> active_scene;
     std::unordered_set<std::uint64_t> active_scene_materials;
+    bool active_stream = state->stream_bridge.load();
+    std::uint64_t active_prompt_identity = state->prompt_identity.load();
     auto stable_visible = [](std::span<const neuralpass::SurfaceCorrespondence> samples) {
         std::vector<std::uint64_t> result;
         std::lock_guard lock(g_baker_probe_mutex);
@@ -1523,7 +1598,11 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         if (!active_scene || !active_scene->valid()) return;
         std::vector<std::uint64_t> stable(active_scene_materials.begin(),
                                           active_scene_materials.end());
-        (void)material_baker.save_cache(active_scene->directory / "atlases", stable);
+        // The unversioned legacy diffusion process cannot safely reuse an atlas
+        // across launches. Keep its accumulation session-local.
+        if (!active_stream)
+            (void)material_baker.save_cache(
+                active_namespace.atlas_root(active_scene->directory), stable);
         (void)scene_catalog.record(active_scene->identity, stable);
     };
     auto activate_scene = [&](std::span<const std::uint64_t> stable, bool force_new = false) {
@@ -1536,7 +1615,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         scene_transitions.set_scene_identity(active_scene->identity);
         state->active_scene_identity = active_scene->identity;
         if (force_new) (void)scene_catalog.record(active_scene->identity, stable);
-        const auto loaded = material_baker.load_cache(active_scene->directory / "atlases");
+        const auto loaded = active_stream ? neuralpass::AtlasCacheStats {} :
+            material_baker.load_cache(active_namespace.atlas_root(active_scene->directory));
         if (loaded.loaded != 0)
             reshade::log::message(reshade::log::level::info,
                 ("NeuralPass loaded " + std::to_string(loaded.loaded) +
@@ -1582,7 +1662,10 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         return neuralpass::make_preview_backend(preset);
     };
     backend = load_backend(active_preset);
-    if (!backend->name().starts_with("onnx/")) {
+    active_namespace = cache_namespace_for(
+        k_presets.at(static_cast<std::size_t>(active_preset)), backend->name());
+    if (!backend->name().starts_with("onnx/") &&
+        !backend->name().starts_with("worker/")) {
         reshade::log::message(reshade::log::level::warning,
             "NeuralPass is using the preview backend. Download a model and build with ONNXRUNTIME_ROOT for neural output.");
     }
@@ -1592,6 +1675,7 @@ void process_frames(RuntimeState *state, std::stop_token token) {
     }
     struct BridgeBakeContext {
         std::uint64_t sequence = 0;
+        std::uint64_t style_generation = 0;
         neuralpass::SceneKey scene;
         std::uint32_t width = 0;
         std::uint32_t height = 0;
@@ -1602,6 +1686,7 @@ void process_frames(RuntimeState *state, std::stop_token token) {
     Image<Color> previous_scene;
     std::optional<neuralpass::SurfaceCaptureFrame> previous_surface;
     std::unordered_set<std::uint64_t> published_replacements;
+    std::uint64_t style_generation = 1;
 
     while (!token.stop_requested()) {
         CapturedFrame frame;
@@ -1614,6 +1699,36 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             surface = std::move(state->pending_surface);
             state->pending_surface.reset();
             state->has_pending = false;
+        }
+        const bool requested_stream = state->stream_bridge.load();
+        const auto requested_prompt_identity = state->prompt_identity.load();
+        if (requested_stream != active_stream ||
+            (requested_stream && requested_prompt_identity != active_prompt_identity)) {
+            save_active_scene();
+            active_stream = requested_stream;
+            active_prompt_identity = requested_prompt_identity;
+            material_baker.reset_scene();
+            published_replacements.clear();
+            {
+                std::lock_guard lock(state->mutex);
+                state->ready_replacements.clear();
+                state->bridge_ready.clear();
+                if (state->ready_width != 0 && state->ready_height != 0) {
+                    const auto bytes = static_cast<std::size_t>(state->ready_width) *
+                                       state->ready_height * 4;
+                    state->ready_styled.assign(bytes, 0);
+                    state->ready_valid.assign(bytes, 0);
+                    state->has_ready = true;
+                }
+                if (!active_stream) state->backend_name = std::string(backend->name());
+            }
+            ++state->replacement_epoch;
+            ++style_generation;
+            history = {};
+            bridge_bake.reset();
+            if (!active_stream && active_scene && active_scene->valid())
+                (void)material_baker.load_cache(
+                    active_namespace.atlas_root(active_scene->directory));
         }
         const Image<Color> current = unpack(frame);
         HistoryFrame cut_reference;
@@ -1648,8 +1763,10 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         } else if (manual == ManualSceneCommand::merge_visible) {
             if (active_scene && !visible_stable.empty()) {
                 const auto imported = scene_catalog.resolve(visible_stable);
-                if (imported.valid() && imported.identity != active_scene->identity)
-                    (void)material_baker.load_cache(imported.directory / "atlases", false);
+                if (!active_stream && imported.valid() &&
+                    imported.identity != active_scene->identity)
+                    (void)material_baker.load_cache(
+                        active_namespace.atlas_root(imported.directory), false);
                 active_scene_materials.insert(visible_stable.begin(), visible_stable.end());
                 (void)scene_catalog.record(active_scene->identity, visible_stable);
             } else if (!active_scene) {
@@ -1689,7 +1806,7 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             correspondence.clear();
         state->scene_transition = static_cast<int>(transition);
         state->scene_generation = scene_transitions.scene_key().generation;
-        if (state->stream_bridge.load()) {
+        if (active_stream) {
             auto current_plan = material_baker.plan(current, correspondence);
             publish_replacement_snapshots(
                 *state, material_baker, correspondence, published_replacements, false);
@@ -1728,7 +1845,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
                     // The motion mailbox will immediately warp this new anchor. Publish only
                     // the final diffusion result as a fallback, never the old RIFE burst.
                     if (!results.empty() && bridge_bake && bridge_bake->sequence == sent &&
-                        bridge_bake->scene == scene_transitions.scene_key()) {
+                        bridge_bake->scene == scene_transitions.scene_key() &&
+                        bridge_bake->style_generation == style_generation) {
                         auto generated = resize_nearest(results.back(), bridge_bake->width,
                                                         bridge_bake->height);
                         auto generated_image = unpack(generated);
@@ -1751,7 +1869,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
                 const auto sequence = std::max<std::uint64_t>(GetTickCount64(), sent + 1);
                 if (write_bridge_frame(resized, sequence)) {
                     state->bridge_sent = sequence;
-                    bridge_bake = BridgeBakeContext {sequence, scene_transitions.scene_key(),
+                    bridge_bake = BridgeBakeContext {sequence, style_generation,
+                        scene_transitions.scene_key(),
                         frame.width, frame.height,
                         std::move(current_plan), correspondence};
                 }
@@ -1760,11 +1879,37 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         }
         const int requested = state->requested_preset.load();
         if (requested != active_preset) {
+            save_active_scene();
             active_preset = requested;
             backend = load_backend(active_preset);
+            active_namespace = cache_namespace_for(
+                k_presets.at(static_cast<std::size_t>(active_preset)), backend->name());
+            material_baker.reset_scene();
+            published_replacements.clear();
+            {
+                std::lock_guard lock(state->mutex);
+                state->ready_replacements.clear();
+                state->bridge_ready.clear();
+                if (state->ready_width != 0 && state->ready_height != 0) {
+                    const auto bytes = static_cast<std::size_t>(state->ready_width) *
+                                       state->ready_height * 4;
+                    state->ready_styled.assign(bytes, 0);
+                    state->ready_valid.assign(bytes, 0);
+                    state->has_ready = true;
+                }
+                state->backend_name = std::string(backend->name());
+            }
+            ++state->replacement_epoch;
+            ++style_generation;
+            if (active_scene && active_scene->valid()) {
+                const auto loaded = material_baker.load_cache(
+                    active_namespace.atlas_root(active_scene->directory));
+                if (loaded.loaded != 0)
+                    reshade::log::message(reshade::log::level::info,
+                        ("NeuralPass loaded " + std::to_string(loaded.loaded) +
+                         " atlases for the selected style/model namespace.").c_str());
+            }
             history = {};
-            std::lock_guard lock(state->mutex);
-            state->backend_name = std::string(backend->name());
         }
         if (state->reset_requested.exchange(false)) history = {};
         const bool sticky_history = state->sticky_history.load();
@@ -1820,7 +1965,7 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         std::uint64_t binding_generation = k_fnv_offset;
         for (const auto binding : visible_bindings) hash_value(binding_generation, binding);
         backend->set_generations({scene_transitions.scene_key().generation,
-                                  static_cast<std::uint64_t>(active_preset + 1),
+                                  style_generation,
                                   binding_generation});
 
         for (const auto &job : jobs) {
@@ -2096,6 +2241,7 @@ void on_init(reshade::api::effect_runtime *runtime) {
     } else {
         save_prompt(*state);
     }
+    state->prompt_identity = stream_prompt_identity(state->prompt.data());
     load_prompt_history(*state);
     if (!runtime->get_device()->create_fence(0, reshade::api::fence_flags::none,
                                               &state->copy_fence))
@@ -2649,6 +2795,7 @@ extern "C" __declspec(dllexport) bool AddonInit(HMODULE addon_module, HMODULE re
     wchar_t path[MAX_PATH] = {};
     GetModuleFileNameW(addon_module, path, MAX_PATH);
     g_addon_directory = std::filesystem::path(path).parent_path();
+    g_game_build_identity = game_build_identity();
     descriptor_tracking::register_events();
     reshade::register_event<reshade::addon_event::init_swapchain>(on_init_swapchain);
     reshade::register_event<reshade::addon_event::destroy_swapchain>(on_destroy_swapchain);

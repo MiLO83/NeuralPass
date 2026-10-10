@@ -11,6 +11,7 @@ set(NEURALPASS_EXTERNAL_WORKER "" CACHE FILEPATH "Optional x64 NeuralPassWorker.
 add_library(neuralpass_core STATIC
     src/atlas_cache.cpp
     src/binding_identity.cpp
+    src/cache_namespace.cpp
     src/color_pipeline.cpp
     src/depth_pyramid.cpp
     src/inference_preview.cpp

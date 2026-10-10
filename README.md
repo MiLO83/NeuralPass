@@ -186,6 +186,9 @@ is disabled by default so the packaged ONNX/preview backend works immediately
 without waiting for an unbundled process. The
 bridge deliberately permits only one generated frame in flight, so latency is
 bounded and stale camera views do not form a queue.
+Changing or enabling a stream prompt invalidates queued output and the current
+material replacements. Because that external model is not versioned by the package,
+its material atlases remain session-local and are never loaded into fixed-model caches.
 
 Applied prompts are kept in `NeuralPassBridge/prompt_history.txt` (newest
 first, maximum 32). The editable prompt field has a **Prompt history** dropdown
@@ -280,7 +283,11 @@ backed by shader bytecode and texture content fingerprints are eligible for a
 cross-launch snapshot; handle-only identities deliberately remain session-local.
 Checksummed scene manifests accumulate restart-stable bindings from multiple
 views. Confirmed scene changes switch namespaces; returning views match and
-reload the prior namespace by binding overlap.
+reload the prior namespace by binding overlap. The containing path also keys the
+game executable build, selected style, inference backend, and exact model contents.
+Changing presets saves the outgoing atlas generation, clears live replacements,
+and loads only the matching style/model generation, so old-style texture pixels
+cannot leak into the newly selected look.
 
 `tools/prompt_restyle.py` is the slower SDXL-Lightning quality reference for a
 single screenshot. `tools/stream_restyle.py` benchmarks the persistent live

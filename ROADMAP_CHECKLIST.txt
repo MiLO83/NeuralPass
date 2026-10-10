@@ -184,11 +184,16 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 
 5. PERSISTENCE AND MIGRATION
 ----------------------------
-[~] Namespace caches by game build, scene, style, model, binding, source, and UV topology.
-    Evidence: persistent scene namespaces and binding keys now include shader/layout,
-    descriptor/source content, and immutable vertex/index topology; mutable geometry
-    is safely session-only. Game-build, style, and model dimensions remain.
-[ ] Double-buffer style generations during prompt/model changes.
+[x] Namespace caches by game build, scene, style, model, binding, source, and UV topology.
+    Evidence: deterministic namespace tests isolate game build, style, and model paths;
+    persistent scene selection sits below the game root, while binding keys include
+    shader/layout, descriptor/source content, and immutable vertex/index topology.
+    Mutable geometry remains safely session-only.
+[~] Double-buffer style generations during prompt/model changes.
+    Evidence: fixed-preset changes save the outgoing namespace, clear its GPU
+    replacements/history, increment the worker style generation, and load only the
+    incoming backend/model-content namespace. Legacy prompt changes reject late
+    results and remain session-local; a managed prompt-worker handoff remains.
 [ ] Migrate compatible identities and coverage after game updates.
 [ ] Quarantine ambiguous migrations for manual reassignment.
 [x] Recover from interrupted/corrupt atlas writes.

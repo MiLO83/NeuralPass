@@ -1,6 +1,7 @@
 #include "neuralpass/temporal.hpp"
 #include "neuralpass/binding_identity.hpp"
 #include "neuralpass/color_pipeline.hpp"
+#include "neuralpass/cache_namespace.hpp"
 #include "neuralpass/depth_pyramid.hpp"
 #include "neuralpass/tile_scheduler.hpp"
 #include "neuralpass/inference.hpp"
@@ -733,6 +734,35 @@ static void test_scene_cache_catalog_matches_returning_views_and_isolates_scenes
     std::filesystem::remove_all(directory, error);
 }
 
+static void test_cache_namespace_isolates_game_style_and_model() {
+    const std::filesystem::path root = "cache-root";
+    const std::filesystem::path scene = "scene-root";
+    const CacheNamespace baseline {0x11, 0x22, 0x33};
+    require(baseline.scene_catalog_root(root) ==
+                root / "game-0000000000000011" / "scenes",
+            "game build was not encoded into the scene catalog namespace");
+    require(baseline.atlas_root(scene) ==
+                scene / "styles" / "style-0000000000000022" /
+                "model-0000000000000033" / "atlases",
+            "style/model atlas namespace is not deterministic");
+    require(CacheNamespace{0x12, 0x22, 0x33}.scene_catalog_root(root) !=
+                baseline.scene_catalog_root(root),
+            "different game builds shared a scene catalog");
+    require(CacheNamespace{0x11, 0x23, 0x33}.atlas_root(scene) !=
+                baseline.atlas_root(scene),
+            "different styles shared an atlas namespace");
+    require(CacheNamespace{0x11, 0x22, 0x34}.atlas_root(scene) !=
+                baseline.atlas_root(scene),
+            "different models shared an atlas namespace");
+    bool rejected = false;
+    try {
+        (void)CacheNamespace{}.atlas_root(scene);
+    } catch (const std::invalid_argument &) {
+        rejected = true;
+    }
+    require(rejected, "zero cache namespace identity was accepted");
+}
+
 int main() {
     try {
         test_reprojection_accepts_stable_pixels();
@@ -761,6 +791,7 @@ int main() {
         test_pending_scene_quarantine_cannot_commit_texture_data();
         test_atlas_cache_round_trip_and_rejects_corruption();
         test_scene_cache_catalog_matches_returning_views_and_isolates_scenes();
+        test_cache_namespace_isolates_game_style_and_model();
         std::cout << "NeuralPass core tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {
