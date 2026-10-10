@@ -202,6 +202,7 @@ std::unordered_set<std::uint64_t> g_binding_style_controls_loaded;
 std::atomic_uint64_t g_binding_style_revision = 1;
 std::unordered_map<reshade::api::device *,
     std::unique_ptr<neuralpass::capture::SurfaceCaptureBackend>> g_surface_captures;
+std::unordered_map<reshade::api::device *, bool> g_surface_capture_enabled;
 std::unordered_map<void *, reshade::api::color_space> g_swapchain_color_spaces;
 std::mutex g_runtime_evidence_mutex;
 
@@ -1225,8 +1226,11 @@ bool on_baker_draw(reshade::api::command_list *command_list, std::uint32_t verte
         std::lock_guard lock(g_baker_probe_mutex);
         if (const auto found = g_vertex_uv_outputs.find(state->vertex_pipeline.handle);
             found != g_vertex_uv_outputs.end()) uv = found->second;
+        const auto cadence = g_surface_capture_enabled.find(command_list->get_device());
+        const bool capture_enabled = cadence == g_surface_capture_enabled.end() || cadence->second;
         if (const auto found = g_surface_captures.find(command_list->get_device());
-            found != g_surface_captures.end()) capture = found->second.get();
+            found != g_surface_captures.end() && capture_enabled)
+            capture = found->second.get();
         if (const auto found = g_source_slot_overrides.find(material.value);
             found != g_source_slot_overrides.end()) source_override = found->second;
     }
@@ -1264,8 +1268,11 @@ bool on_baker_draw_indexed(reshade::api::command_list *command_list,
         std::lock_guard lock(g_baker_probe_mutex);
         if (const auto found = g_vertex_uv_outputs.find(state->vertex_pipeline.handle);
             found != g_vertex_uv_outputs.end()) uv = found->second;
+        const auto cadence = g_surface_capture_enabled.find(command_list->get_device());
+        const bool capture_enabled = cadence == g_surface_capture_enabled.end() || cadence->second;
         if (const auto found = g_surface_captures.find(command_list->get_device());
-            found != g_surface_captures.end()) capture = found->second.get();
+            found != g_surface_captures.end() && capture_enabled)
+            capture = found->second.get();
         if (const auto found = g_source_slot_overrides.find(material.value);
             found != g_source_slot_overrides.end()) source_override = found->second;
     }
@@ -1306,8 +1313,11 @@ bool on_baker_draw_indirect(reshade::api::command_list *command_list,
         std::lock_guard lock(g_baker_probe_mutex);
         if (const auto found = g_vertex_uv_outputs.find(state->vertex_pipeline.handle);
             found != g_vertex_uv_outputs.end()) uv = found->second;
+        const auto cadence = g_surface_capture_enabled.find(command_list->get_device());
+        const bool capture_enabled = cadence == g_surface_capture_enabled.end() || cadence->second;
         if (const auto found = g_surface_captures.find(command_list->get_device());
-            found != g_surface_captures.end()) capture = found->second.get();
+            found != g_surface_captures.end() && capture_enabled)
+            capture = found->second.get();
         if (const auto found = g_source_slot_overrides.find(material.value);
             found != g_source_slot_overrides.end()) source_override = found->second;
     }
@@ -1350,6 +1360,11 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::atomic_uint64_t completed = 0;
     std::atomic_uint64_t dropped = 0;
     std::atomic_uint64_t effect_frames = 0;
+    // Full-resolution readback and CPU color conversion are intentionally paced.
+    // The compositor keeps presenting the last completed persistent result between
+    // captures, so render cadence does not need to equal inference cadence.
+    std::atomic_uint32_t capture_interval = 8;
+    std::atomic_uint64_t capture_skipped = 0;
     std::array<std::atomic_uint64_t, 6> visibility_counts {};
     std::atomic_uint32_t tile_budget = 2;
     std::atomic_uint32_t effective_tile_budget = 1;
@@ -2533,6 +2548,8 @@ void write_runtime_evidence(RuntimeState &state, reshade::api::device_api api,
                 .classification = supported ? "compatible_format_color_space"
                     : "unsupported_or_mismatched_format_color_space",
                 .effect_frames = effect_frames,
+                .capture_interval = state.capture_interval.load(),
+                .capture_skipped = state.capture_skipped.load(),
                 .draws_seen = g_draws_seen.load(),
                 .uv_draws_seen = g_uv_draws_seen.load(),
                 .material_draws_seen = g_material_draws_seen.load(),
@@ -2680,6 +2697,7 @@ void on_baker_destroy_device(reshade::api::device *device) {
             capture = std::move(found->second);
             g_surface_captures.erase(found);
         }
+        g_surface_capture_enabled.erase(device);
     }
 }
 
@@ -2872,6 +2890,8 @@ void on_destroy(reshade::api::effect_runtime *runtime) {
                << "maximum_tile_budget=" << (state != nullptr ? state->tile_budget.load() : 0) << '\n'
                << "effective_tile_budget=" << (state != nullptr ? state->effective_tile_budget.load() : 0) << '\n'
                << "target_frame_rate=" << (state != nullptr ? state->target_frame_rate.load() : 0) << '\n'
+               << "capture_interval=" << (state != nullptr ? state->capture_interval.load() : 0) << '\n'
+               << "capture_skipped=" << (state != nullptr ? state->capture_skipped.load() : 0) << '\n'
                << "measured_frame_time_us=" << (state != nullptr ? state->measured_frame_time_us.load() : 0) << '\n'
                << "measured_tile_time_us=" << (state != nullptr ? state->measured_tile_time_us.load() : 0) << '\n'
                << "budget_pressure_events=" << (state != nullptr ? state->budget_pressure_events.load() : 0) << '\n'
@@ -2890,7 +2910,9 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
                       reshade::api::resource_view rtv, reshade::api::resource_view) {
     auto *state = runtime->get_private_data<RuntimeState>();
     if (!state) return;
-    ++state->effect_frames;
+    const auto effect_frame = state->effect_frames.fetch_add(1) + 1;
+    const auto capture_interval = std::max<std::uint32_t>(1, state->capture_interval.load());
+    const bool capture_this_frame = (effect_frame - 1) % capture_interval == 0;
     const auto effect_time = std::chrono::steady_clock::now();
     if (state->last_effect_time.time_since_epoch().count() != 0) {
         const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -2947,7 +2969,8 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
             auto surface = capture->finish_frame(
                 device->get_api() == reshade::api::device_api::vulkan
                     ? static_cast<void *>(command_list)
-                    : reinterpret_cast<void *>(command_list->get_native()));
+                    : reinterpret_cast<void *>(command_list->get_native()),
+                capture_this_frame);
             if (surface) {
                 std::uint64_t supported = 0;
                 for (const auto &pixel : surface->pixels().pixels())
@@ -2960,6 +2983,8 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
                 while (state->surface_ready.size() > 6)
                     state->surface_ready.erase(state->surface_ready.begin());
             }
+            std::lock_guard lock(g_baker_probe_mutex);
+            g_surface_capture_enabled[device] = effect_frame % capture_interval == 0;
         }
     }
     if (state->copy_fence == 0 ||
@@ -3047,6 +3072,15 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
         ++state->next_read;
     }
 
+    // A 1080p capture entails an 8 MiB GPU readback plus per-pixel CPU color
+    // conversion. Running that work on every present can dominate games before
+    // the adaptive tile budget has any work left to remove. Keep presenting the
+    // persistent styled texture while sampling the scene at a lower cadence.
+    if (!capture_this_frame) {
+        ++state->capture_skipped;
+        return;
+    }
+
     // Never overwrite one of the three copies still in flight.
     if (state->next_signal - state->next_read >= std::size(state->readback)) {
         ++state->dropped;
@@ -3084,6 +3118,9 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         static_cast<unsigned long long>(state->submitted.load()),
         static_cast<unsigned long long>(state->completed.load()),
         static_cast<unsigned long long>(state->dropped.load()));
+    ImGui::Text("Capture every %u effect frames  Skipped: %llu",
+        state->capture_interval.load(),
+        static_cast<unsigned long long>(state->capture_skipped.load()));
     const auto frame_time_ms = static_cast<double>(state->measured_frame_time_us.load()) / 1000.0;
     const auto tile_time_ms = static_cast<double>(state->measured_tile_time_us.load()) / 1000.0;
     ImGui::Text("Frame: %.2f ms  Inference/tile: %.2f ms  Active tiles: %u/%u",
@@ -3346,6 +3383,9 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
     int target_fps = static_cast<int>(state->target_frame_rate.load());
     if (ImGui::SliderInt("Target frame rate", &target_fps, 30, 240))
         state->target_frame_rate = static_cast<std::uint32_t>(target_fps);
+    int capture_interval = static_cast<int>(state->capture_interval.load());
+    if (ImGui::SliderInt("Capture interval (effect frames)", &capture_interval, 1, 32))
+        state->capture_interval = static_cast<std::uint32_t>(capture_interval);
     int budget = static_cast<int>(state->tile_budget.load());
     if (ImGui::SliderInt("Maximum tiles per worker update", &budget, 1, 16))
         state->tile_budget = static_cast<std::uint32_t>(budget);

@@ -21,6 +21,11 @@ captured frames and complete upload buffers under a short mutex. There is one
 pending and one ready slot; newer capture work is dropped while either slot is
 occupied, providing natural backpressure.
 
+Full-resolution display and mesh-surface readback are also paced to one capture
+per eight effect frames by default. The compositor keeps presenting the last
+persistent result between samples, bounding GPU copies and per-pixel CPU decoding
+independently of the worker's tile budget. The overlay can adjust the interval.
+
 On Win32, model execution crosses into the packaged x64 `NeuralPassWorker.exe`
 because the pinned ONNX Runtime DirectML distribution has no Win32 binaries. A
 random per-process named pipe carries fixed-size versioned control records; one

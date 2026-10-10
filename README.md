@@ -154,6 +154,11 @@ validity debug view to see which pixels currently have persistent styled data.
 
 The add-on intentionally drops capture frames when inference is behind. It
 never queues an unbounded amount of work or blocks the game waiting for a tile.
+Full-resolution display and mesh-surface readback are paced to one capture per
+eight effect frames by default while the compositor continuously presents the last
+persistent result; the interval is adjustable in the overlay. This keeps GPU
+copies and CPU color/surface decoding from dominating render cadence after tile
+inference has backed off.
 Adaptive budgeting is enabled by default: it sheds one tile immediately when
 smoothed frame pacing misses the selected target or capture work backs up, may
 suspend inference completely under pressure, and admits a probe tile only after

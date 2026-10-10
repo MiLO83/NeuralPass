@@ -35,8 +35,8 @@ public:
                               const capture::DrawCommand &draw,
                               int source_texture_override = -1) override;
     [[nodiscard]] std::optional<SurfaceCaptureFrame> finish_frame(
-        void *native_command_list) override;
-    [[nodiscard]] std::optional<SurfaceCaptureFrame> finish_frame();
+        void *native_command_list, bool schedule_next = true) override;
+    [[nodiscard]] std::optional<SurfaceCaptureFrame> finish_frame(bool schedule_next = true);
     [[nodiscard]] capture::CaptureStatistics statistics() const noexcept override;
     [[nodiscard]] std::uint32_t width() const noexcept override;
     [[nodiscard]] std::uint32_t height() const noexcept override;

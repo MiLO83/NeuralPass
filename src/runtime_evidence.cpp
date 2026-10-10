@@ -56,6 +56,8 @@ std::string runtime_display_evidence_json(const RuntimeDisplayEvidence &value) {
            << "  \"hdr_path\": " << boolean(value.hdr_path) << ",\n"
            << "  \"classification\": " << quoted(value.classification) << ",\n"
            << "  \"effect_frames\": " << value.effect_frames << ",\n"
+           << "  \"capture_interval\": " << value.capture_interval << ",\n"
+           << "  \"capture_skipped\": " << value.capture_skipped << ",\n"
            << "  \"draws_seen\": " << value.draws_seen << ",\n"
            << "  \"uv_draws_seen\": " << value.uv_draws_seen << ",\n"
            << "  \"material_draws_seen\": " << value.material_draws_seen << ",\n"

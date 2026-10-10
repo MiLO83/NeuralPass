@@ -281,6 +281,8 @@ void test_d3d9_geometry_capture() {
         restored_target == backbuffer, "D3D9 replay did not restore native state");
     release(restored_shader); release(restored_texture); release(restored_target);
 
+    require(!capture.finish_frame(false).has_value(),
+        "paced D3D9 poll unexpectedly queued or completed a capture");
     require(!capture.finish_frame().has_value(), "D3D9 readback completed before queueing");
     device->Present(nullptr, nullptr, nullptr, nullptr);
     std::optional<neuralpass::SurfaceCaptureFrame> captured;

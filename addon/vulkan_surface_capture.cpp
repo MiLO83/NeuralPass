@@ -787,7 +787,8 @@ bool SurfaceCapture::replay(void *command_list, const capture::UvInput &uv,
     // if a future indirect-command implementation reports capture failure.
     return true;
 }
-std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(void *command_list) {
+std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
+    void *command_list, bool schedule_next) {
     if (impl_ == nullptr || command_list == nullptr || impl_->completion_fence == 0)
         return std::nullopt;
     std::lock_guard lock(impl_->mutex);
@@ -796,6 +797,7 @@ std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(void *command_li
         commands != impl_->queue->get_immediate_command_list())
         return std::nullopt;
     auto completed = impl_->take_completed_frame();
+    if (!schedule_next) return completed;
     if (!impl_->cleared) return completed;
 
     std::size_t selected = impl_->readback.size();

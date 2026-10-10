@@ -974,7 +974,8 @@ bool SurfaceCapture::replay(void *native_command_list, const capture::UvInput &u
     return true;
 }
 
-std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(void *native_command_list) {
+std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
+    void *native_command_list, bool schedule_next) {
     if (impl_ == nullptr || native_command_list == nullptr || impl_->fence == nullptr)
         return std::nullopt;
     std::lock_guard lock(impl_->mutex);
@@ -1024,6 +1025,8 @@ std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(void *native_com
         }
         slot.fence_value = 0;
     }
+
+    if (!schedule_next) return result;
 
     auto &slot = impl_->readback[impl_->next_readback];
     if (slot.fence_value != 0) {

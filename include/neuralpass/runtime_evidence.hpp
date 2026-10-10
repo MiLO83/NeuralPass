@@ -22,6 +22,8 @@ struct RuntimeDisplayEvidence {
     bool hdr_path = false;
     std::string_view classification;
     std::uint64_t effect_frames = 0;
+    std::uint32_t capture_interval = 1;
+    std::uint64_t capture_skipped = 0;
     std::uint64_t draws_seen = 0;
     std::uint64_t uv_draws_seen = 0;
     std::uint64_t material_draws_seen = 0;

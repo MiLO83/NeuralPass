@@ -753,8 +753,8 @@ bool SurfaceCapture::replay(void *native_command_list, const UvSemantic &uv,
 }
 
 std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
-    void *native_command_list) {
-    return finish_frame(static_cast<ID3D11DeviceContext *>(native_command_list));
+    void *native_command_list, bool schedule_next) {
+    return finish_frame(static_cast<ID3D11DeviceContext *>(native_command_list), schedule_next);
 }
 
 std::uint64_t SurfaceCapture::replayed_draws() const noexcept {
@@ -856,7 +856,7 @@ bool SurfaceCapture::draw_indexed_indirect(
 }
 
 std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
-    ID3D11DeviceContext *context) {
+    ID3D11DeviceContext *context, bool schedule_next) {
     if (impl_ == nullptr || context == nullptr) return std::nullopt;
     std::optional<SurfaceCaptureFrame> result;
     for (auto &slot : impl_->readback) {
@@ -918,6 +918,8 @@ std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(
         }
         slot.in_flight = false;
     }
+
+    if (!schedule_next) return result;
 
     auto &next = impl_->readback[impl_->next_readback];
     if (!next.in_flight) {

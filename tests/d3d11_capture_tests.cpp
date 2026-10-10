@@ -441,6 +441,8 @@ void test_triangle_replay_produces_material_uv() {
             std::abs(static_cast<int>(target_uncovered[2]) - 240) <= 1,
         "uncovered replacement texel did not retain the original source");
     context->Unmap(target_staging, 0);
+    require(!capture.finish_frame(context, false).has_value(),
+        "paced D3D11 poll unexpectedly queued or completed a capture");
     require(!capture.finish_frame(context).has_value(),
         "readback completed before it was queued");
     context->Flush();

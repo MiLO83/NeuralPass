@@ -298,6 +298,8 @@ void test_d3d10_geometry_capture() {
         "D3D10 replay did not restore all render targets");
     release(restored_targets[0]); release(restored_targets[1]); release(restored_dsv);
 
+    require(!capture.finish_frame(false).has_value(),
+        "paced D3D10 poll unexpectedly queued or completed a capture");
     require(!capture.finish_frame().has_value(), "D3D10 readback completed before queueing");
     device->Flush();
     std::optional<neuralpass::SurfaceCaptureFrame> captured;

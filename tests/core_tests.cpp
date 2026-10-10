@@ -293,6 +293,8 @@ static void test_runtime_display_evidence_json_is_exact_and_escaped() {
         .hdr_path = true,
         .classification = "compatible_format_color_space",
         .effect_frames = 900,
+        .capture_interval = 8,
+        .capture_skipped = 787,
         .draws_seen = 800,
         .uv_draws_seen = 700,
         .material_draws_seen = 600,
@@ -320,6 +322,8 @@ static void test_runtime_display_evidence_json_is_exact_and_escaped() {
         "  \"hdr_path\": true,\n"
         "  \"classification\": \"compatible_format_color_space\",\n"
         "  \"effect_frames\": 900,\n"
+        "  \"capture_interval\": 8,\n"
+        "  \"capture_skipped\": 787,\n"
         "  \"draws_seen\": 800,\n"
         "  \"uv_draws_seen\": 700,\n"
         "  \"material_draws_seen\": 600,\n"

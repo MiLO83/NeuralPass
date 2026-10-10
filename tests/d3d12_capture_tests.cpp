@@ -64,6 +64,8 @@ void test_warp_surfaces_and_barriers() {
                 "could not initialize D3D12 capture surfaces");
         require(backend.width() == 8 && backend.height() == 8,
                 "D3D12 capture dimensions were not retained");
+        require(!backend.finish_frame(commands, false).has_value(),
+                "paced D3D12 poll unexpectedly queued or completed a capture");
         require(!backend.finish_frame(commands).has_value(),
                 "first D3D12 readback unexpectedly completed synchronously");
         require(SUCCEEDED(commands->Close()), "could not close D3D12 command list");

@@ -130,7 +130,7 @@ public:
                                       const DrawCommand &draw,
                                       int source_texture_override = -1) = 0;
     [[nodiscard]] virtual std::optional<SurfaceCaptureFrame> finish_frame(
-        void *native_command_list) = 0;
+        void *native_command_list, bool schedule_next = true) = 0;
     [[nodiscard]] virtual CaptureStatistics statistics() const noexcept = 0;
     [[nodiscard]] virtual std::uint32_t width() const noexcept = 0;
     [[nodiscard]] virtual std::uint32_t height() const noexcept = 0;

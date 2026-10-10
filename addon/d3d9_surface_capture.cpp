@@ -525,11 +525,11 @@ bool SurfaceCapture::replay(void *, const UvSemantic &uv, std::uint64_t material
     }
 }
 
-std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(void *) {
-    return finish_frame();
+std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(void *, bool schedule_next) {
+    return finish_frame(schedule_next);
 }
 
-std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame() {
+std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame(bool schedule_next) {
     if (impl_ == nullptr) return std::nullopt;
     std::optional<SurfaceCaptureFrame> result;
     for (auto &slot : impl_->readback) {
@@ -581,6 +581,7 @@ std::optional<SurfaceCaptureFrame> SurfaceCapture::finish_frame() {
             if (locked[index]) slot.cpu[index]->UnlockRect();
         slot.in_flight = false;
     }
+    if (!schedule_next) return result;
     auto &next = impl_->readback[impl_->next_readback];
     if (!next.in_flight) {
         bool queued = impl_->cleared;

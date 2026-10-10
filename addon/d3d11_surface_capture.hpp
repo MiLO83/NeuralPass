@@ -67,9 +67,9 @@ public:
     // Polls completed staging copies without flushing or waiting, then queues
     // the current surface into a free ring slot and clears it for the next frame.
     [[nodiscard]] std::optional<SurfaceCaptureFrame> finish_frame(
-        void *native_command_list) override;
+        void *native_command_list, bool schedule_next = true) override;
     [[nodiscard]] std::optional<SurfaceCaptureFrame> finish_frame(
-        ID3D11DeviceContext *context);
+        ID3D11DeviceContext *context, bool schedule_next = true);
 
     [[nodiscard]] std::uint64_t replayed_draws() const noexcept;
     [[nodiscard]] std::uint64_t dropped_frames() const noexcept;

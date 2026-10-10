@@ -141,6 +141,9 @@ if (Test-Path -LiteralPath $runtimeEvidencePath -PathType Leaf) {
         if ($runtimeEvidence.schema_version -ge 2) {
             Add-Line "- live counters: effects $($runtimeEvidence.effect_frames); draws $($runtimeEvidence.draws_seen); UV draws $($runtimeEvidence.uv_draws_seen); material draws $($runtimeEvidence.material_draws_seen)"
             Add-Line "- capture: frames $($runtimeEvidence.surface_frames_captured); supported pixels $($runtimeEvidence.surface_pixels_captured); inference submitted/completed/dropped $($runtimeEvidence.inference_submitted)/$($runtimeEvidence.inference_completed)/$($runtimeEvidence.inference_dropped)"
+            if ($null -ne $runtimeEvidence.capture_interval) {
+                Add-Line "- pacing: one display/surface capture per $($runtimeEvidence.capture_interval) effect frames; skipped $($runtimeEvidence.capture_skipped)"
+            }
         }
     } catch { Add-Line "! unreadable runtime evidence: $($_.Exception.Message)" }
 } else {
