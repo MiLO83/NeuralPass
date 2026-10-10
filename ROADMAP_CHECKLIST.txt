@@ -234,7 +234,15 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [ ] Quarantine ambiguous migrations for manual reassignment.
 [x] Recover from interrupted/corrupt atlas writes.
     Evidence: checked snapshot format and corruption-isolation test.
-[ ] Add per-binding, per-scene, and global cache controls.
+[x] Add per-binding, per-scene, and global cache controls.
+    Evidence: explicitly armed overlay commands are serialized through the worker,
+    clear the selected material in the active namespace, the current scene across
+    styles/models, or the entire local NeuralPassCache, then invalidate baker,
+    worker, screen-history, queued-upload, and GPU-replacement generations. Deletion
+    reports entry/byte counts in the overlay and shutdown probe. Core tests prove
+    binding isolation, interrupted-generation removal, unrelated-file preservation,
+    scene/sibling isolation, global removal, broad-path rejection, and canonical
+    symlink-escape rejection; x64/x86 add-on builds pass.
 
 6. INSTALLER, SAFETY, AND DOCUMENTATION
 ---------------------------------------

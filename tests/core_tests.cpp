@@ -2,6 +2,7 @@
 #include "neuralpass/temporal.hpp"
 #include "neuralpass/binding_identity.hpp"
 #include "neuralpass/binding_style.hpp"
+#include "neuralpass/cache_control.hpp"
 #include "neuralpass/color_pipeline.hpp"
 #include "neuralpass/cache_namespace.hpp"
 #include "neuralpass/depth_pyramid.hpp"
@@ -1011,6 +1012,73 @@ static void test_cache_namespace_isolates_game_style_and_model() {
     require(rejected, "zero cache namespace identity was accepted");
 }
 
+static void test_cache_controls_are_scoped_and_path_guarded() {
+    const auto unique = std::to_string(std::chrono::steady_clock::now()
+        .time_since_epoch().count());
+    const auto sandbox = std::filesystem::temp_directory_path() /
+        ("neuralpass-cache-controls-" + unique);
+    const auto root = sandbox / "NeuralPassCache";
+    const auto scene = root / "game-a" / "scenes" / "scene-1111";
+    const auto sibling = root / "game-a" / "scenes" / "scene-2222";
+    const auto atlases = scene / "styles" / "style-a" / "model-a" / "atlases";
+    std::filesystem::create_directories(atlases);
+    std::filesystem::create_directories(sibling);
+
+    MaterialTextureAtlas first(11, 2, 2);
+    MaterialTextureAtlas second(22, 2, 2);
+    SurfaceCorrespondence sample {.material_id=11, .u=0.25f, .v=0.25f};
+    require(first.observe({0.8f, 0.2f, 0.1f, 1.0f}, sample),
+            "binding cache fixture was not paintable");
+    sample.material_id = 22;
+    require(second.observe({0.1f, 0.7f, 0.3f, 1.0f}, sample),
+            "sibling cache fixture was not paintable");
+    require(first.save(atlases / "000000000000000b-1.npatlas") &&
+            first.save(atlases / "000000000000000b-2.npatlas") &&
+            second.save(atlases / "0000000000000016-1.npatlas"),
+            "cache-control fixtures could not be saved");
+    {
+        std::ofstream temporary(atlases / "000000000000000b-3.npatlas.tmp");
+        temporary << "interrupted";
+        std::ofstream unrelated(atlases / "notes.txt");
+        unrelated << "keep";
+    }
+
+    const auto binding = erase_binding_cache(root, atlases, 11);
+    require(!binding.unsafe_path && binding.entries_removed == 3 &&
+            binding.bytes_removed != 0 && binding.rejected == 0,
+            "binding cache control did not remove every matching generation");
+    require(std::filesystem::exists(atlases / "0000000000000016-1.npatlas") &&
+            std::filesystem::exists(atlases / "notes.txt"),
+            "binding cache control removed an unrelated material or file");
+    require(erase_binding_cache(root, scene, 11).unsafe_path,
+            "binding cache control accepted a non-atlas directory");
+
+    const auto one_scene = erase_scene_cache(root, scene);
+    require(!one_scene.unsafe_path && one_scene.entries_removed != 0 &&
+            !std::filesystem::exists(scene) && std::filesystem::exists(sibling),
+            "scene cache control escaped or failed its selected scene");
+    require(erase_scene_cache(root, sandbox).unsafe_path,
+            "scene cache control accepted a path outside its cache root");
+
+    const auto outside = sandbox / "outside";
+    std::filesystem::create_directories(outside / "scene-escape");
+    std::error_code link_error;
+    std::filesystem::create_directory_symlink(outside, root / "redirect", link_error);
+    if (!link_error)
+        require(erase_scene_cache(root, root / "redirect" / "scene-escape").unsafe_path &&
+                std::filesystem::exists(outside / "scene-escape"),
+                "scene cache control followed a canonical escape through a symlink");
+
+    const auto all = erase_all_caches(root);
+    require(!all.unsafe_path && all.entries_removed != 0 &&
+            !std::filesystem::exists(root),
+            "global cache control did not remove the exact NeuralPass cache root");
+    require(erase_all_caches(sandbox).unsafe_path,
+            "global cache control accepted a broad non-NeuralPass path");
+    std::error_code error;
+    std::filesystem::remove_all(sandbox, error);
+}
+
 int main() {
     try {
         test_reprojection_accepts_stable_pixels();
@@ -1046,6 +1114,7 @@ int main() {
         test_atlas_cache_round_trip_and_rejects_corruption();
         test_scene_cache_catalog_matches_returning_views_and_isolates_scenes();
         test_cache_namespace_isolates_game_style_and_model();
+        test_cache_controls_are_scoped_and_path_guarded();
         std::cout << "NeuralPass core tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {

@@ -206,6 +206,10 @@ public:
     void clear() noexcept { reset_scene(); }
     [[nodiscard]] std::uint64_t epoch() const noexcept { return epoch_; }
     [[nodiscard]] std::size_t material_count() const noexcept { return atlases_.size(); }
+    bool erase(std::uint64_t material_id) noexcept {
+        ++epoch_;
+        return atlases_.erase(material_id) != 0;
+    }
     [[nodiscard]] MaterialTextureAtlas *find(std::uint64_t material_id) noexcept;
     [[nodiscard]] const MaterialTextureAtlas *find(std::uint64_t material_id) const noexcept;
 

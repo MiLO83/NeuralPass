@@ -61,6 +61,15 @@ bindings get the same runtime behavior without unsafe cross-launch persistence.
 The all-default control set deliberately retains the original fixed-style identity,
 so upgrading does not strand otherwise compatible pre-control atlases.
 
+Cache mutation is serialized through the worker. Binding deletion is restricted
+to matching atlas-generation filenames in the active atlas directory; scene
+deletion requires a `scene-*` directory canonically contained by the configured
+cache root; global deletion requires the target itself to be named
+`NeuralPassCache`. Symlinked roots and canonical escapes are rejected. Successful
+commands invalidate the baker epoch, worker style generation, screen history,
+queued uploads, and graphics-API replacements before generation resumes. The UI
+requires a separate arming action and reports exact entry/byte counts.
+
 ## Coordinate contracts
 
 - Motion is **current pixel to previous pixel**, measured in pixels.

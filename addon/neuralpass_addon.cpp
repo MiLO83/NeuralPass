@@ -11,6 +11,7 @@
 #include "neuralpass/adaptive_budget.hpp"
 #include "neuralpass/binding_identity.hpp"
 #include "neuralpass/binding_style.hpp"
+#include "neuralpass/cache_control.hpp"
 #include "neuralpass/cache_namespace.hpp"
 #include "neuralpass/color_pipeline.hpp"
 #include "neuralpass/inference.hpp"
@@ -334,6 +335,13 @@ enum class ManualSceneCommand : int {
     keep_current,
     start_new,
     merge_visible,
+};
+
+enum class CacheCommand : int {
+    none,
+    selected_binding,
+    current_scene,
+    all_caches,
 };
 
 void on_baker_init_pipeline(reshade::api::device *device, reshade::api::pipeline_layout layout,
@@ -1357,6 +1365,12 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::uint64_t selected_binding = 0;
     int selected_source_slot = -1;
     int selected_binding_strength = 100;
+    std::atomic_int cache_command = static_cast<int>(CacheCommand::none);
+    std::atomic_uint64_t cache_binding = 0;
+    std::atomic_uint64_t cache_entries_removed = 0;
+    std::atomic_uint64_t cache_bytes_removed = 0;
+    bool cache_controls_armed = false;
+    std::string cache_status = "No cache deletion requested.";
     std::atomic_int requested_preset = 0;
     std::array<char, 512> prompt {};
     std::vector<std::string> prompt_history;
@@ -1657,8 +1671,9 @@ void process_frames(RuntimeState *state, std::stop_token token) {
     neuralpass::MaterialTextureBaker material_baker;
     neuralpass::SceneTransitionTracker scene_transitions;
     neuralpass::CacheNamespace active_namespace {g_game_build_identity, 1, 1};
-    neuralpass::SceneCacheCatalog scene_catalog(active_namespace.scene_catalog_root(
-        g_addon_directory / "NeuralPassCache"));
+    const auto cache_root = g_addon_directory / "NeuralPassCache";
+    neuralpass::SceneCacheCatalog scene_catalog(
+        active_namespace.scene_catalog_root(cache_root));
     std::optional<neuralpass::SceneCacheSelection> active_scene;
     std::unordered_set<std::uint64_t> active_scene_materials;
     bool active_stream = state->stream_bridge.load();
@@ -1948,6 +1963,68 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         auto binding_style = neuralpass::plan_binding_styles(
             frame.width, frame.height, correspondence, binding_controls);
         correspondence = binding_style.active_correspondence;
+
+        const auto cache_command = static_cast<CacheCommand>(state->cache_command.exchange(
+            static_cast<int>(CacheCommand::none)));
+        if (cache_command != CacheCommand::none) {
+            neuralpass::CacheEraseStats erased;
+            std::string scope;
+            bool performed = true;
+            if (cache_command == CacheCommand::selected_binding) {
+                const auto binding = state->cache_binding.exchange(0);
+                scope = "selected binding " + std::to_string(binding);
+                if (binding == 0) {
+                    performed = false;
+                } else {
+                    (void)material_baker.erase(binding);
+                    if (!active_stream && active_scene && active_scene->valid())
+                        erased = neuralpass::erase_binding_cache(
+                            cache_root,
+                            active_namespace.atlas_root(active_scene->directory), binding);
+                }
+            } else if (cache_command == CacheCommand::current_scene) {
+                scope = "current scene";
+                if (!active_scene || !active_scene->valid()) {
+                    performed = false;
+                } else {
+                    material_baker.reset_scene();
+                    erased = neuralpass::erase_scene_cache(cache_root, active_scene->directory);
+                }
+            } else if (cache_command == CacheCommand::all_caches) {
+                scope = "all caches";
+                material_baker.reset_scene();
+                erased = neuralpass::erase_all_caches(cache_root);
+            }
+            if (performed) {
+                published_replacements.clear();
+                {
+                    std::lock_guard lock(state->mutex);
+                    state->ready_replacements.clear();
+                    state->bridge_ready.clear();
+                    if (state->ready_width != 0 && state->ready_height != 0) {
+                        const auto bytes = static_cast<std::size_t>(state->ready_width) *
+                                           state->ready_height * 4;
+                        state->ready_styled.assign(bytes, 0);
+                        state->ready_valid.assign(bytes, 0);
+                        state->has_ready = true;
+                    }
+                    state->cache_status = erased.unsafe_path
+                        ? "Refused unsafe cache path for " + scope + "."
+                        : "Cleared " + scope + ": " +
+                            std::to_string(erased.entries_removed) + " entries, " +
+                            std::to_string(erased.bytes_removed) + " bytes.";
+                }
+                state->cache_entries_removed += erased.entries_removed;
+                state->cache_bytes_removed += erased.bytes_removed;
+                ++state->replacement_epoch;
+                ++style_generation;
+                history = {};
+                bridge_bake.reset();
+            } else {
+                std::lock_guard lock(state->mutex);
+                state->cache_status = "No active target exists for " + scope + ".";
+            }
+        }
         if (active_stream) {
             auto current_plan = material_baker.plan(
                 current, correspondence, reveal_classes ? &*reveal_classes : nullptr);
@@ -2708,6 +2785,8 @@ void on_destroy(reshade::api::effect_runtime *runtime) {
                << "budget_pressure_events=" << (state != nullptr ? state->budget_pressure_events.load() : 0) << '\n'
                << "binding_style_controls=" << binding_style_control_count << '\n'
                << "binding_style_revision=" << g_binding_style_revision.load() << '\n'
+               << "cache_entries_removed=" << (state != nullptr ? state->cache_entries_removed.load() : 0) << '\n'
+               << "cache_bytes_removed=" << (state != nullptr ? state->cache_bytes_removed.load() : 0) << '\n'
                << "unique_materials=" << material_count << '\n';
     }
     runtime->destroy_private_data<RuntimeState>();
@@ -3123,6 +3202,33 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         state->scene_command = static_cast<int>(ManualSceneCommand::merge_visible);
     ImGui::TextWrapped("Keep accepts quarantined bindings; Start creates an isolated cache; "
                        "Merge imports the matching visible cache into the active scene.");
+    ImGui::SeparatorText("Cache controls");
+    ImGui::Checkbox("Arm destructive cache controls", &state->cache_controls_armed);
+    if (state->cache_controls_armed) {
+        if (state->selected_binding != 0 && ImGui::Button("Forget selected binding")) {
+            state->cache_binding = state->selected_binding;
+            state->cache_command = static_cast<int>(CacheCommand::selected_binding);
+            state->cache_controls_armed = false;
+        }
+        if (state->selected_binding != 0) ImGui::SameLine();
+        if (ImGui::Button("Forget current scene")) {
+            state->cache_command = static_cast<int>(CacheCommand::current_scene);
+            state->cache_controls_armed = false;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Forget all caches")) {
+            state->cache_command = static_cast<int>(CacheCommand::all_caches);
+            state->cache_controls_armed = false;
+        }
+    } else {
+        ImGui::TextDisabled("Arm first; deletion cannot be undone.");
+    }
+    std::string cache_status;
+    {
+        std::lock_guard lock(state->mutex);
+        cache_status = state->cache_status;
+    }
+    ImGui::TextWrapped("%s", cache_status.c_str());
     bool adaptive_budget = state->adaptive_tile_budget.load();
     if (ImGui::Checkbox("Adaptive frame-time budget", &adaptive_budget))
         state->adaptive_tile_budget = adaptive_budget;

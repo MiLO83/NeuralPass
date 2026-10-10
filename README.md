@@ -354,6 +354,17 @@ cannot leak into the newly selected look.
 Per-binding strength/bypass settings participate in the same style identity and
 therefore receive the same stale-result rejection and cache isolation.
 
+The add-on overlay also exposes armed cache deletion at three scopes. **Forget
+selected binding** removes every saved generation for that material in the active
+scene/style/model namespace. **Forget current scene** removes that scene and all
+of its style/model atlases. **Forget all caches** removes the complete local
+`NeuralPassCache`, including namespaces left by older game builds. Each command
+runs on the worker, invalidates in-flight generations and GPU replacements, and
+reports the number of entries and bytes removed. The destructive buttons appear
+only while **Arm destructive cache controls** is checked; deletion is permanent.
+Learning resumes from visible material immediately after deletion, so set a
+binding to bypass if it should remain unstyled instead of being relearned.
+
 `tools/prompt_restyle.py` is the slower SDXL-Lightning quality reference for a
 single screenshot. `tools/stream_restyle.py` benchmarks the persistent live
 backend without starting the game.
@@ -389,6 +400,8 @@ backend without starting the game.
   DirectML session. It is asynchronous, but zero-copy GPU tensors remain future work.
 - Fixed style-transfer networks are spatially local and may show seams. Halos
   and validity feathering reduce them but do not eliminate every model artifact.
+- Cache deletion is intentionally permanent and path-guarded. Export or copy the
+  `NeuralPassCache` directory first if you may want to restore learned atlases.
 
 ## Design notes
 
