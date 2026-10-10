@@ -151,6 +151,8 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 4. MANAGED NEURAL RUNTIME
 -------------------------
 [ ] Replace the WSL filesystem bridge with NeuralPassWorker.exe.
+    The legacy bridge is now disabled by default; packaged ONNX/preview inference
+    remains self-contained while the managed prompt-worker transport is unfinished.
 [ ] Add versioned named-pipe control and bounded shared-memory transport.
 [ ] Reject stale scene, style, binding, and request generations.
 [~] Support ONNX Runtime DirectML on NVIDIA, AMD, and Intel.

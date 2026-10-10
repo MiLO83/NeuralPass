@@ -174,8 +174,10 @@ cd /home/topnotch/github/MiLO83/NeuralPass
 external/stream-venv/bin/python tools/stream_bridge.py
 ```
 
-In ReShade's **Add-ons > NeuralPass** panel, keep **Prompt-driven
-StreamDiffusion** enabled, edit the prompt, and click **Apply prompt**. The
+After starting that external bridge, opt in via **Add-ons > NeuralPass >
+Prompt-driven StreamDiffusion**, edit the prompt, and click **Apply prompt**. It
+is disabled by default so the packaged ONNX/preview backend works immediately
+without waiting for an unbundled process. The
 bridge deliberately permits only one generated frame in flight, so latency is
 bounded and stale camera views do not form a queue.
 

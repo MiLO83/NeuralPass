@@ -1210,7 +1210,9 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::atomic_uint32_t refresh_age = 120;
     std::atomic_bool reset_requested = false;
     std::atomic_bool sticky_history = true;
-    std::atomic_bool stream_bridge = true;
+    // The packaged ONNX/preview backend must work without an external process.
+    // The legacy WSL StreamDiffusion bridge is explicit opt-in.
+    std::atomic_bool stream_bridge = false;
     std::atomic_int scene_command = static_cast<int>(ManualSceneCommand::none);
     std::atomic_uint64_t active_scene_identity = 0;
     std::atomic_uint64_t scene_generation = 1;

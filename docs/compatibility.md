@@ -29,6 +29,10 @@ that signal to bounded sRGB before inference and converts the styled result back
 in the final shader. HLG, unknown color spaces, and mismatched format/color-space
 pairs are bypassed rather than treated as plausible HDR.
 
+The legacy prompt-driven StreamDiffusion/WSL bridge is disabled by default and
+is not required by either package. Enable it only after separately starting its
+Python environment; otherwise the built-in ONNX or preview worker is used.
+
 ## Safe installation
 
 1. Install ReShade with full add-on support into an offline game.
