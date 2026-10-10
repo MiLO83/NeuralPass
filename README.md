@@ -365,6 +365,16 @@ only while **Arm destructive cache controls** is checked; deletion is permanent.
 Learning resumes from visible material immediately after deletion, so set a
 binding to bypass if it should remain unstyled instead of being relearned.
 
+When a game executable changes, NeuralPass keeps the new build in a separate
+namespace and compares its restart-stable visible bindings with older scene
+manifests. One uniquely compatible scene is copied transactionally into the new
+build namespace; reuse remains keyed by exact material IDs and atlas coverage, so
+changed bindings naturally begin uncovered. Equal best matches are quarantined
+instead. The overlay lists their source build, scene, overlap, and binding count,
+and requires **Use candidate** or **Start new scene** before persistent baking
+continues. Existing destinations, symlinks, path escapes, and partial overwrites
+are refused.
+
 `tools/prompt_restyle.py` is the slower SDXL-Lightning quality reference for a
 single screenshot. `tools/stream_restyle.py` benchmarks the persistent live
 backend without starting the game.

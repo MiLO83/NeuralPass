@@ -19,6 +19,7 @@ add_library(neuralpass_core STATIC
     src/binding_identity.cpp
     src/binding_style.cpp
     src/cache_control.cpp
+    src/cache_migration.cpp
     src/cache_namespace.cpp
     src/color_pipeline.cpp
     src/depth_pyramid.cpp

@@ -230,8 +230,20 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     replacements/history, increment the worker style generation, and load only the
     incoming backend/model-content namespace. Legacy prompt changes reject late
     results and remain session-local; a managed prompt-worker handoff remains.
-[ ] Migrate compatible identities and coverage after game updates.
-[ ] Quarantine ambiguous migrations for manual reassignment.
+[x] Migrate compatible identities and coverage after game updates.
+    Evidence: a new build with no local scene searches only valid sibling game-*
+    catalogs using restart-stable binding overlap. One unique best scene is copied
+    through a bounded staging path and committed by rename without overwriting a
+    destination; reuse remains exact-ID keyed, so unchanged materials retain atlas
+    color, coverage, provenance, style, and model namespaces while changed bindings
+    remain uncovered. Core tests
+    load the migrated atlas and prove its direct-observation coverage survives.
+[x] Quarantine ambiguous migrations for manual reassignment.
+    Evidence: equal best prior-build matches suspend persistent scene activation and
+    are listed in the overlay with build/scene/overlap evidence. The user must choose
+    a candidate or Start new scene. Tests prove two equally compatible builds remain
+    ambiguous, an explicit choice imports only the selected scene, and existing
+    targets, forged paths, and symlinked source trees fail closed.
 [x] Recover from interrupted/corrupt atlas writes.
     Evidence: checked snapshot format and corruption-isolation test.
 [x] Add per-binding, per-scene, and global cache controls.

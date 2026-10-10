@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <span>
+#include <vector>
 
 namespace neuralpass {
 
@@ -12,6 +13,12 @@ struct SceneCacheSelection {
     bool matched_existing = false;
 
     [[nodiscard]] bool valid() const noexcept { return identity != 0; }
+};
+
+struct SceneCacheRecord {
+    std::uint64_t identity = 0;
+    std::filesystem::path directory;
+    std::vector<std::uint64_t> bindings;
 };
 
 // Persistent scene namespaces are selected only from restart-stable binding
@@ -27,6 +34,7 @@ public:
     [[nodiscard]] SceneCacheSelection create_new(
         std::span<const std::uint64_t> visible_binding_ids,
         std::uint64_t discriminator) const;
+    [[nodiscard]] std::vector<SceneCacheRecord> records() const;
     [[nodiscard]] bool record(
         std::uint64_t scene_identity,
         std::span<const std::uint64_t> visible_binding_ids) const;

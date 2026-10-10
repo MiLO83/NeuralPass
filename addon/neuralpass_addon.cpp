@@ -12,6 +12,7 @@
 #include "neuralpass/binding_identity.hpp"
 #include "neuralpass/binding_style.hpp"
 #include "neuralpass/cache_control.hpp"
+#include "neuralpass/cache_migration.hpp"
 #include "neuralpass/cache_namespace.hpp"
 #include "neuralpass/color_pipeline.hpp"
 #include "neuralpass/inference.hpp"
@@ -79,6 +80,16 @@ void hash_value(std::uint64_t &hash, const Value &value) {
 
 std::uint64_t nonzero_hash(std::uint64_t hash) {
     return hash == 0 ? 1 : hash;
+}
+
+std::string hex_identity(std::uint64_t value) {
+    constexpr char digits[] = "0123456789abcdef";
+    std::string result(16, '0');
+    for (int index = 15; index >= 0; --index) {
+        result[static_cast<std::size_t>(index)] = digits[value & 0xfu];
+        value >>= 4;
+    }
+    return result;
 }
 
 void hash_string(std::uint64_t &hash, std::string_view value) {
@@ -1371,6 +1382,11 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::atomic_uint64_t cache_bytes_removed = 0;
     bool cache_controls_armed = false;
     std::string cache_status = "No cache deletion requested.";
+    std::atomic_int migration_choice = -1;
+    std::atomic_uint64_t migration_entries_copied = 0;
+    std::atomic_uint64_t migration_bytes_copied = 0;
+    std::vector<std::string> migration_candidates;
+    std::string migration_status = "No prior-build migration requested.";
     std::atomic_int requested_preset = 0;
     std::array<char, 512> prompt {};
     std::vector<std::string> prompt_history;
@@ -1703,12 +1719,86 @@ void process_frames(RuntimeState *state, std::stop_token token) {
                 active_namespace.atlas_root(active_scene->directory), stable);
         (void)scene_catalog.record(active_scene->identity, stable);
     };
+    auto clear_migration_prompt = [&](std::string status) {
+        std::lock_guard lock(state->mutex);
+        state->migration_candidates.clear();
+        state->migration_status = std::move(status);
+    };
+    auto describe_migration_candidates = [&](const neuralpass::CacheMigrationPlan &plan) {
+        std::lock_guard lock(state->mutex);
+        state->migration_candidates.clear();
+        state->migration_candidates.reserve(plan.candidates.size());
+        for (const auto &candidate : plan.candidates) {
+            state->migration_candidates.push_back(
+                "build " + hex_identity(candidate.game_build) + ", scene " +
+                hex_identity(candidate.scene_identity) + ", overlap " +
+                std::to_string(static_cast<int>(candidate.overlap * 100.0f + 0.5f)) +
+                "% (" + std::to_string(candidate.shared_bindings) + "/" +
+                std::to_string(candidate.known_bindings) + " bindings)");
+        }
+        state->migration_status = "Compatible prior-build scenes are ambiguous; "
+                                  "choose one or start a new scene.";
+    };
+    auto apply_migration = [&](const neuralpass::CacheMigrationCandidate &candidate) {
+        const auto migrated = neuralpass::apply_cache_migration(
+            cache_root, g_game_build_identity, candidate);
+        if (!migrated.succeeded()) {
+            clear_migration_prompt("Prior-build migration refused: " +
+                (migrated.error.empty() ? std::string("unsafe or conflicting cache path")
+                                        : migrated.error));
+            return false;
+        }
+        state->migration_entries_copied += migrated.entries_copied;
+        state->migration_bytes_copied += migrated.bytes_copied;
+        clear_migration_prompt("Migrated scene " + hex_identity(candidate.scene_identity) +
+            " from build " + hex_identity(candidate.game_build) + ": " +
+            std::to_string(migrated.entries_copied) + " entries, " +
+            std::to_string(migrated.bytes_copied) + " bytes.");
+        reshade::log::message(reshade::log::level::info,
+            ("NeuralPass migrated compatible prior-build scene " +
+             hex_identity(candidate.scene_identity) + ".").c_str());
+        return true;
+    };
     auto activate_scene = [&](std::span<const std::uint64_t> stable, bool force_new = false) {
         if (stable.empty()) return;
-        active_scene = force_new
-            ? scene_catalog.create_new(stable, static_cast<std::uint64_t>(
-                std::chrono::steady_clock::now().time_since_epoch().count()))
-            : scene_catalog.resolve(stable);
+        if (force_new) {
+            state->migration_choice = -1;
+            clear_migration_prompt("Started a new scene without importing prior-build coverage.");
+            active_scene = scene_catalog.create_new(stable, static_cast<std::uint64_t>(
+                std::chrono::steady_clock::now().time_since_epoch().count()));
+        } else {
+            active_scene = scene_catalog.resolve(stable);
+            if (!active_stream && !active_scene->matched_existing) {
+                const auto migration = neuralpass::plan_cache_migration(
+                    cache_root, g_game_build_identity, stable);
+                if (migration.disposition == neuralpass::CacheMigrationDisposition::unique) {
+                    if (!apply_migration(migration.candidates.front())) {
+                        active_scene.reset();
+                        return;
+                    }
+                    active_scene = scene_catalog.resolve(stable);
+                } else if (migration.disposition ==
+                           neuralpass::CacheMigrationDisposition::ambiguous) {
+                    describe_migration_candidates(migration);
+                    const int choice = state->migration_choice.exchange(-1);
+                    if (choice < 0 || static_cast<std::size_t>(choice) >=
+                                          migration.candidates.size()) {
+                        active_scene.reset();
+                        return;
+                    }
+                    if (!apply_migration(migration.candidates[
+                            static_cast<std::size_t>(choice)])) {
+                        active_scene.reset();
+                        return;
+                    }
+                    active_scene = scene_catalog.resolve(stable);
+                } else {
+                    clear_migration_prompt("No compatible prior-build scene found; "
+                                           "learning a new scene.");
+                }
+            }
+        }
+        if (!active_scene || !active_scene->valid()) return;
         active_scene_materials.insert(stable.begin(), stable.end());
         scene_transitions.set_scene_identity(active_scene->identity);
         state->active_scene_identity = active_scene->identity;
@@ -2787,6 +2877,8 @@ void on_destroy(reshade::api::effect_runtime *runtime) {
                << "binding_style_revision=" << g_binding_style_revision.load() << '\n'
                << "cache_entries_removed=" << (state != nullptr ? state->cache_entries_removed.load() : 0) << '\n'
                << "cache_bytes_removed=" << (state != nullptr ? state->cache_bytes_removed.load() : 0) << '\n'
+               << "migration_entries_copied=" << (state != nullptr ? state->migration_entries_copied.load() : 0) << '\n'
+               << "migration_bytes_copied=" << (state != nullptr ? state->migration_bytes_copied.load() : 0) << '\n'
                << "unique_materials=" << material_count << '\n';
     }
     runtime->destroy_private_data<RuntimeState>();
@@ -3202,6 +3294,22 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         state->scene_command = static_cast<int>(ManualSceneCommand::merge_visible);
     ImGui::TextWrapped("Keep accepts quarantined bindings; Start creates an isolated cache; "
                        "Merge imports the matching visible cache into the active scene.");
+    std::vector<std::string> migration_candidates;
+    std::string migration_status;
+    {
+        std::lock_guard lock(state->mutex);
+        migration_candidates = state->migration_candidates;
+        migration_status = state->migration_status;
+    }
+    ImGui::TextWrapped("%s", migration_status.c_str());
+    for (std::size_t index = 0; index < migration_candidates.size(); ++index) {
+        ImGui::TextWrapped("Candidate %zu: %s", index + 1,
+                           migration_candidates[index].c_str());
+        const auto label = "Use candidate " + std::to_string(index + 1) +
+                           "##migration" + std::to_string(index);
+        if (ImGui::Button(label.c_str()))
+            state->migration_choice = static_cast<int>(index);
+    }
     ImGui::SeparatorText("Cache controls");
     ImGui::Checkbox("Arm destructive cache controls", &state->cache_controls_armed);
     if (state->cache_controls_armed) {

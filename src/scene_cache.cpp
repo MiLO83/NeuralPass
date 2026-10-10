@@ -149,26 +149,38 @@ SceneCacheSelection SceneCacheCatalog::resolve(
     std::span<const std::uint64_t> visible_binding_ids) const {
     const auto visible = canonical(visible_binding_ids);
     if (visible.empty()) return {};
-    std::error_code error;
     std::uint64_t best_identity = 0;
     float best_overlap = 0.0f;
-    if (std::filesystem::exists(root_, error) && !error) {
-        for (const auto &entry : std::filesystem::directory_iterator(root_, error)) {
-            if (error) break;
-            if (!entry.is_directory(error)) continue;
-            const auto manifest = newest_manifest(entry.path());
-            if (!manifest) continue;
-            const float score = overlap(visible, manifest->bindings);
-            if (score >= overlap_threshold_ && score > best_overlap) {
-                best_overlap = score;
-                best_identity = manifest->identity;
-            }
+    for (const auto &record : records()) {
+        const float score = overlap(visible, record.bindings);
+        if (score >= overlap_threshold_ && score > best_overlap) {
+            best_overlap = score;
+            best_identity = record.identity;
         }
     }
     if (best_identity != 0)
         return {best_identity, root_ / ("scene-" + hex(best_identity)), true};
     const auto created = identity(visible);
     return {created, root_ / ("scene-" + hex(created)), false};
+}
+
+std::vector<SceneCacheRecord> SceneCacheCatalog::records() const {
+    std::vector<SceneCacheRecord> result;
+    std::error_code error;
+    if (!std::filesystem::exists(root_, error) || error) return result;
+    for (const auto &entry : std::filesystem::directory_iterator(root_, error)) {
+        if (error) break;
+        if (entry.is_symlink(error)) { error.clear(); continue; }
+        if (!entry.is_directory(error)) { error.clear(); continue; }
+        const auto manifest = newest_manifest(entry.path());
+        if (!manifest) continue;
+        result.push_back({manifest->identity, entry.path(), manifest->bindings});
+    }
+    std::sort(result.begin(), result.end(), [](const auto &left, const auto &right) {
+        if (left.identity != right.identity) return left.identity < right.identity;
+        return left.directory < right.directory;
+    });
+    return result;
 }
 
 SceneCacheSelection SceneCacheCatalog::create_new(

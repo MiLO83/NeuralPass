@@ -3,6 +3,7 @@
 #include "neuralpass/binding_identity.hpp"
 #include "neuralpass/binding_style.hpp"
 #include "neuralpass/cache_control.hpp"
+#include "neuralpass/cache_migration.hpp"
 #include "neuralpass/color_pipeline.hpp"
 #include "neuralpass/cache_namespace.hpp"
 #include "neuralpass/depth_pyramid.hpp"
@@ -1079,6 +1080,92 @@ static void test_cache_controls_are_scoped_and_path_guarded() {
     std::filesystem::remove_all(sandbox, error);
 }
 
+static void test_cache_migration_requires_unique_or_explicit_selection() {
+    const auto unique = std::to_string(std::chrono::steady_clock::now()
+        .time_since_epoch().count());
+    const auto sandbox = std::filesystem::temp_directory_path() /
+        ("neuralpass-cache-migration-" + unique);
+    const auto root = sandbox / "NeuralPassCache";
+    const CacheNamespace old_namespace {1, 0x20, 0x30};
+    const auto old_scenes = old_namespace.scene_catalog_root(root);
+    SceneCacheCatalog old_catalog(old_scenes, 0.5f);
+    require(old_catalog.record(0xabc, std::array<std::uint64_t, 2> {11, 22}),
+            "old-build migration scene could not be recorded");
+    const auto old_scene = old_scenes / "scene-0000000000000abc";
+    const auto old_atlases = old_namespace.atlas_root(old_scene);
+    std::filesystem::create_directories(old_atlases);
+    MaterialTextureAtlas atlas(11, 2, 2);
+    SurfaceCorrespondence sample {.material_id=11, .u=0.5f, .v=0.5f};
+    require(atlas.observe({0.4f, 0.5f, 0.6f, 1.0f}, sample) &&
+            atlas.save(old_atlases / "000000000000000b-1.npatlas"),
+            "old-build atlas fixture could not be saved");
+    const CacheNamespace weak_namespace {9, 0x20, 0x30};
+    SceneCacheCatalog weak_catalog(weak_namespace.scene_catalog_root(root), 0.5f);
+    require(weak_catalog.record(0xdef,
+                std::array<std::uint64_t, 4> {11, 33, 44, 55}),
+            "weak migration scene could not be recorded");
+
+    const auto unique_plan = plan_cache_migration(
+        root, 2, std::array<std::uint64_t, 1> {11});
+    require(unique_plan.disposition == CacheMigrationDisposition::unique &&
+            unique_plan.candidates.size() == 1 &&
+            unique_plan.candidates.front().scene_identity == 0xabc &&
+            unique_plan.candidates.front().shared_bindings == 1,
+            "one compatible prior game build was not selected uniquely");
+    const auto migrated = apply_cache_migration(root, 2, unique_plan.candidates.front());
+    if (!migrated.succeeded())
+        throw std::runtime_error("unique compatible coverage migration failed: " +
+                                 migrated.error);
+    require(migrated.entries_copied >= 3 && migrated.bytes_copied != 0 &&
+            std::filesystem::exists(migrated.target_scene / "styles" /
+                "style-0000000000000020" / "model-0000000000000030" /
+                "atlases" / "000000000000000b-1.npatlas"),
+            "unique compatible coverage was not copied into the new game namespace");
+    MaterialTextureBaker migrated_baker({.atlas_width=2, .atlas_height=2});
+    const auto loaded = migrated_baker.load_cache(
+        old_namespace.atlas_root(migrated.target_scene));
+    require(loaded.loaded == 1 && migrated_baker.find(11) != nullptr &&
+            migrated_baker.find(11)->coverage().at(1, 1) ==
+                MaterialTextureAtlas::kObserved,
+            "migrated atlas coverage was not readable or preserved");
+    require(apply_cache_migration(root, 2, unique_plan.candidates.front()).target_conflict,
+            "migration overwrote an existing current-build scene");
+
+    const auto ambiguous = plan_cache_migration(
+        root, 3, std::array<std::uint64_t, 1> {11});
+    require(ambiguous.disposition == CacheMigrationDisposition::ambiguous &&
+            ambiguous.candidates.size() == 2,
+            "equally compatible prior builds were not quarantined as ambiguous");
+    const auto explicitly_selected = apply_cache_migration(root, 3, ambiguous.candidates[1]);
+    require(explicitly_selected.succeeded() &&
+            explicitly_selected.target_scene.filename() == "scene-0000000000000abc",
+            "explicit migration candidate selection did not import the chosen scene");
+
+    const auto outside = sandbox / "outside";
+    std::filesystem::create_directories(outside);
+    std::error_code link_error;
+    std::filesystem::create_directory_symlink(outside, old_scene / "escape", link_error);
+    if (!link_error)
+        require(apply_cache_migration(root, 4, unique_plan.candidates.front()).unsafe_path,
+                "migration accepted a symlink within the source scene tree");
+    std::error_code destination_link_error;
+    std::filesystem::create_directory_symlink(
+        root / "game-0000000000000002",
+        root / "game-0000000000000006", destination_link_error);
+    if (!destination_link_error)
+        require(apply_cache_migration(root, 6, ambiguous.candidates[1]).unsafe_path,
+                "migration accepted a symlinked destination game namespace");
+    auto forged = unique_plan.candidates.front();
+    forged.scene_directory = outside;
+    require(apply_cache_migration(root, 5, forged).unsafe_path,
+            "migration accepted a source outside NeuralPassCache");
+    require(plan_cache_migration(root, 0, std::array<std::uint64_t, 1> {11})
+                .disposition == CacheMigrationDisposition::none,
+            "migration accepted a zero current-build identity");
+    std::error_code error;
+    std::filesystem::remove_all(sandbox, error);
+}
+
 int main() {
     try {
         test_reprojection_accepts_stable_pixels();
@@ -1115,6 +1202,7 @@ int main() {
         test_scene_cache_catalog_matches_returning_views_and_isolates_scenes();
         test_cache_namespace_isolates_game_style_and_model();
         test_cache_controls_are_scoped_and_path_guarded();
+        test_cache_migration_requires_unique_or_explicit_selection();
         std::cout << "NeuralPass core tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {

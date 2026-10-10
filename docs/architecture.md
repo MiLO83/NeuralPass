@@ -70,6 +70,15 @@ commands invalidate the baker epoch, worker style generation, screen history,
 queued uploads, and graphics-API replacements before generation resumes. The UI
 requires a separate arming action and reports exact entry/byte counts.
 
+Game-build migration never weakens the build namespace boundary. If the current
+catalog has no scene match, sibling `game-*` catalogs are compared using only
+restart-stable binding IDs. A single best match is copied through a shorter-than-
+final staging directory and committed by rename, retaining compatible material
+IDs, coverage provenance, style IDs, and model IDs. Equal best matches suspend
+persistent scene activation and appear as explicit overlay choices. Starting a
+new scene declines migration. Source trees, destination parents, and canonical
+containment are checked before copying; symlinks and existing targets fail closed.
+
 ## Coordinate contracts
 
 - Motion is **current pixel to previous pixel**, measured in pixels.
