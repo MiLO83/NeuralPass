@@ -178,6 +178,14 @@ D3D12 capture ---------+--> SurfaceCaptureFrame --> sparse correspondences --> m
 Vulkan capture --------+
 ```
 
+The visibility classifier's output is converted into first-observation and
+newly-visible texture lanes by one shared mapping used by the live add-on and core
+acceptance tests. Two-frame tests cover removal of a nearer moving occluder and a
+motion-reprojected camera pan: only the exposed/off-screen-entry UV becomes eligible
+for inpainting, established coverage remains unchanged, and unsampled atlas regions
+remain original. This proves the backend-neutral policy; live per-API game and soak
+evidence remains a separate release gate.
+
 Backend adapters own shader instrumentation, resource-state transitions, and
 asynchronous GPU readback. They all decode into `SurfaceCaptureFrame`, whose
 validation and compaction rules are shared. A backend may leave unsupported

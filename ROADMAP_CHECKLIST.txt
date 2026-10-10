@@ -304,8 +304,17 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 
 7. ACCEPTANCE AND RELEASE
 -------------------------
-[ ] Moving occluder inpaints only newly visible UV texels.
-[ ] Camera rotation/off-screen entry fills newly visible texels in the same scene.
+[x] Moving occluder inpaints only newly visible UV texels.
+    Evidence: a two-frame shared-core acceptance test removes a nearer foreground
+    material, classifies only the exposed background sample as disoccluded, routes it
+    through the newly-visible mask, and proves commit preserves established coverage
+    while permanently invisible UVs remain uncovered; x64/x86 core suites pass.
+[x] Camera rotation/off-screen entry fills newly visible texels in the same scene.
+    Evidence: a motion-reprojected two-frame acceptance test classifies the entering
+    material sample as off-screen entry, reuses the same material atlas, commits only
+    that UV through the inpaint lane, and proves old and invisible coverage are unchanged;
+    the exact visibility-to-bake mapping is shared with the live add-on. Game evidence
+    remains part of the separate per-API stress/soak gates.
 [x] Same-scene hard cuts preserve atlases; new-scene cuts isolate generations.
     Evidence: camera-cut preservation and confirmed-new-scene generation tests.
 [x] Returning views reuse established coverage without regeneration.

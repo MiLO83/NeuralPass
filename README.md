@@ -32,6 +32,11 @@ test or release artifact; `[~]` means the production path is still incomplete.
 
 The generic path uses framebuffer color confidence. The core accepts depth,
 motion, mesh UV gradients, binding identity, and visibility classes. The
+shared visibility-to-bake mapping separates first observations from disoccluded,
+newly-front-facing, and off-screen-entry inpainting, so graphics adapters cannot
+invent different persistent-coverage rules. Two-frame acceptance tests prove that
+moving occluders and camera pans add only newly visible UV texels while established
+and permanently unseen texture regions remain unchanged. The
 experimental D3D9, D3D10, D3D11, and D3D12 adapters supply exact rasterized mesh UVs and
 gradients; D3D12 now also samples a descriptor-tracked source texture when a
 compatible texture/sampler pair is bound. Its bounded-table RGBA8/BGRA8

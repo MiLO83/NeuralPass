@@ -91,4 +91,26 @@ VisibilityClassification classify_visibility(
     return result;
 }
 
+Image<TextureRevealClass> texture_reveal_classes(
+    const VisibilityClassification &visibility) {
+    Image<TextureRevealClass> result(visibility.pixels.width(),
+        visibility.pixels.height(), TextureRevealClass::unknown);
+    for (std::size_t index = 0; index < visibility.pixels.size(); ++index) {
+        switch (visibility.pixels.pixels()[index]) {
+        case VisibilityClass::first_observation:
+            result.pixels()[index] = TextureRevealClass::first_observation;
+            break;
+        case VisibilityClass::disoccluded:
+        case VisibilityClass::newly_front_facing:
+        case VisibilityClass::offscreen_entry:
+            result.pixels()[index] = TextureRevealClass::newly_visible;
+            break;
+        case VisibilityClass::unsupported:
+        case VisibilityClass::known_visible:
+            break;
+        }
+    }
+    return result;
+}
+
 } // namespace neuralpass

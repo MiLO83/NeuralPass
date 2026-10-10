@@ -420,6 +420,97 @@ static void test_visibility_classifies_newly_revealed_causes() {
             "camera-cut classification reused previous-frame visibility");
 }
 
+static void test_moving_occluder_inpaints_only_revealed_texture_texels() {
+    constexpr std::uint64_t background = 0xB001;
+    constexpr std::uint64_t occluder = 0xC001;
+    SurfaceCaptureFrame previous(2, 1, 10);
+    SurfaceCaptureFrame current(2, 1, 11);
+    previous.pixels().at(0, 0) = {background, 0.1f, 0.5f, 5.0f, 5.0f, 1.0f};
+    previous.pixels().at(1, 0) = {occluder, 0.5f, 0.5f, 2.0f, 2.0f, 1.0f};
+    current.pixels().at(0, 0) = {background, 0.1f, 0.5f, 5.0f, 5.0f, 1.0f};
+    current.pixels().at(1, 0) = {background, 0.9f, 0.5f, 5.0f, 5.0f, 1.0f};
+
+    const auto visibility = classify_visibility(current, &previous, nullptr);
+    const auto causes = texture_reveal_classes(visibility);
+    require(visibility.pixels.at(0, 0) == VisibilityClass::known_visible &&
+            visibility.pixels.at(1, 0) == VisibilityClass::disoccluded &&
+            causes.at(0, 0) == TextureRevealClass::unknown &&
+            causes.at(1, 0) == TextureRevealClass::newly_visible,
+            "moving occluder did not isolate the revealed background sample");
+
+    MaterialTextureBaker baker({.atlas_width=32, .atlas_height=16});
+    Image<Color> established(2, 1, {0.0f, 0.0f, 0.0f, 1.0f});
+    established.at(0, 0) = {0.9f, 0.1f, 0.1f, 0.8f};
+    const auto previous_mapping = previous.correspondences();
+    require(baker.update(established,
+                std::span(previous_mapping.data(), 1)).accepted == 1,
+            "occlusion fixture did not establish visible background coverage");
+
+    const auto current_mapping = current.correspondences();
+    Image<Color> live(2, 1, {0.2f, 0.2f, 0.2f, 0.8f});
+    const auto plan = baker.plan(live, current_mapping, &causes);
+    require(plan.known_pixels == 1 && plan.revealed_pixels == 1 &&
+            plan.first_observation_pixels == 0 && plan.inpaint_pixels == 1 &&
+            plan.reveal_mask.at(0, 0) == 0 && plan.reveal_mask.at(1, 0) == 255,
+            "occluder removal scheduled established or hidden texture coverage");
+
+    Image<Color> generated(2, 1, {1.0f, 0.0f, 1.0f, 1.0f});
+    generated.at(1, 0) = {0.1f, 0.2f, 0.9f, 1.0f};
+    require(baker.commit(plan, generated, current_mapping).accepted == 1,
+            "newly disoccluded texture sample was not committed");
+    const auto *atlas = baker.find(background);
+    require(atlas != nullptr && atlas->has_coverage(0.1f, 0.5f) &&
+            atlas->has_coverage(0.9f, 0.5f) && !atlas->has_coverage(0.5f, 0.5f),
+            "occluder reveal expanded coverage into permanently invisible texels");
+    require(atlas->sample(0.1f, 0.5f).r > atlas->sample(0.1f, 0.5f).b &&
+            atlas->sample(0.9f, 0.5f).b > atlas->sample(0.9f, 0.5f).r,
+            "occluder reveal repainted established coverage or missed the new texel");
+}
+
+static void test_camera_pan_fills_only_offscreen_entry_in_same_scene() {
+    constexpr std::uint64_t material = 0xCA11;
+    SurfaceCaptureFrame previous(2, 1, 20);
+    SurfaceCaptureFrame current(2, 1, 21);
+    previous.pixels().at(1, 0) = {material, 0.1f, 0.5f, 4.0f, 4.0f, 1.0f};
+    current.pixels().at(0, 0) = {material, 0.9f, 0.5f, 4.0f, 4.0f, 1.0f};
+    current.pixels().at(1, 0) = {material, 0.1f, 0.5f, 4.0f, 4.0f, 1.0f};
+    Image<Motion> motion(2, 1, {});
+    motion.at(0, 0) = {-2.0f, 0.0f};
+
+    const auto visibility = classify_visibility(current, &previous, &motion);
+    const auto causes = texture_reveal_classes(visibility);
+    require(visibility.pixels.at(0, 0) == VisibilityClass::offscreen_entry &&
+            visibility.pixels.at(1, 0) == VisibilityClass::known_visible &&
+            causes.at(0, 0) == TextureRevealClass::newly_visible &&
+            causes.at(1, 0) == TextureRevealClass::unknown,
+            "camera pan did not isolate the material entering from off screen");
+
+    MaterialTextureBaker baker({.atlas_width=32, .atlas_height=16});
+    Image<Color> first(2, 1, {0.0f, 0.0f, 0.0f, 1.0f});
+    first.at(1, 0) = {0.8f, 0.7f, 0.1f, 1.0f};
+    const auto previous_mapping = previous.correspondences();
+    require(baker.update(first, previous_mapping).accepted == 1,
+            "camera-pan fixture did not establish same-scene atlas coverage");
+
+    const auto current_mapping = current.correspondences();
+    Image<Color> live(2, 1, {0.3f, 0.3f, 0.3f, 1.0f});
+    const auto plan = baker.plan(live, current_mapping, &causes);
+    require(plan.known_pixels == 1 && plan.revealed_pixels == 1 &&
+            plan.first_observation_pixels == 0 && plan.inpaint_pixels == 1 &&
+            plan.inpaint_mask.at(0, 0) == 255 && plan.reveal_mask.at(1, 0) == 0,
+            "camera pan regenerated established same-scene texture coverage");
+    Image<Color> generated(2, 1, {0.1f, 0.8f, 0.9f, 1.0f});
+    generated.at(1, 0) = {1.0f, 0.0f, 1.0f, 1.0f};
+    require(baker.commit(plan, generated, current_mapping).accepted == 1,
+            "off-screen entry was not committed to the existing material atlas");
+    const auto *atlas = baker.find(material);
+    require(atlas != nullptr && atlas->has_coverage(0.1f, 0.5f) &&
+            atlas->has_coverage(0.9f, 0.5f) && !atlas->has_coverage(0.5f, 0.5f) &&
+            atlas->sample(0.1f, 0.5f).r > atlas->sample(0.1f, 0.5f).b &&
+            atlas->sample(0.9f, 0.5f).b > atlas->sample(0.9f, 0.5f).r,
+            "camera pan lost old coverage or filled unseen texture space");
+}
+
 static void test_texture_baker_splats_inpaints_and_reconstructs() {
     Image<Color> restyled(2, 1);
     restyled.at(0, 0) = {1.0f, 0.1f, 0.0f, 1.0f};
@@ -1201,6 +1292,8 @@ int main() {
         test_binding_identity_is_pipeline_and_slot_specific();
         test_depth_pyramid_and_conservative_raymarch();
         test_visibility_classifies_newly_revealed_causes();
+        test_moving_occluder_inpaints_only_revealed_texture_texels();
+        test_camera_pan_fills_only_offscreen_entry_in_same_scene();
         test_texture_baker_splats_inpaints_and_reconstructs();
         test_texture_baker_locks_observed_texels_and_rejects_bad_depth();
         test_elliptical_uv_splat_uses_gradients_and_confidence();

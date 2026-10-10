@@ -1942,19 +1942,7 @@ void process_frames(RuntimeState *state, std::stop_token token) {
                 *surface, visual_cut || !previous_surface ? nullptr : &*previous_surface, nullptr);
             for (std::size_t index = 0; index < visibility.counts.size(); ++index)
                 state->visibility_counts[index] = visibility.counts[index];
-            reveal_classes.emplace(frame.width, frame.height,
-                                   neuralpass::TextureRevealClass::unknown);
-            for (std::size_t index = 0; index < visibility.pixels.size(); ++index) {
-                const auto value = visibility.pixels.pixels()[index];
-                if (value == neuralpass::VisibilityClass::first_observation)
-                    reveal_classes->pixels()[index] =
-                        neuralpass::TextureRevealClass::first_observation;
-                else if (value == neuralpass::VisibilityClass::disoccluded ||
-                         value == neuralpass::VisibilityClass::newly_front_facing ||
-                         value == neuralpass::VisibilityClass::offscreen_entry)
-                    reveal_classes->pixels()[index] =
-                        neuralpass::TextureRevealClass::newly_visible;
-            }
+            reveal_classes = neuralpass::texture_reveal_classes(visibility);
             correspondence = surface->correspondences();
             previous_surface = std::move(surface);
         } else {

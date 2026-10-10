@@ -42,4 +42,10 @@ struct VisibilityClassification {
     const Image<Motion> *current_to_previous,
     const VisibilitySettings &settings = {});
 
+// Converts screen-space causes into the two disjoint texture-generation lanes.
+// Keeping this mapping in the shared core prevents live adapters and acceptance
+// tests from silently disagreeing about what may enter persistent coverage.
+[[nodiscard]] Image<TextureRevealClass> texture_reveal_classes(
+    const VisibilityClassification &visibility);
+
 } // namespace neuralpass
