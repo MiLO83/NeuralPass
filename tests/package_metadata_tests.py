@@ -40,7 +40,7 @@ def main() -> int:
         if sbom["creationInfo"]["created"] != metadata["created_utc"]:
             raise SystemExit("SBOM and package timestamps differ")
         names = {item["name"] for item in sbom["packages"]}
-        if names != {"NeuralPass", "ReShade"}:
+        if names != {"NeuralPass", "ReShade", "Vulkan-Headers"}:
             raise SystemExit(f"unexpected preview dependencies: {sorted(names)}")
     print("package metadata determinism tests passed")
     return 0

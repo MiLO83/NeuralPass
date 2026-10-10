@@ -110,26 +110,27 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     actual backend replay restores the PSO and render target under WARP; production
     companion-PSO creation inside ReShade and real-game evidence remain.
 [~] Production Vulkan x86/x64 capture and replacement.
-    Evidence: an experimental x64 ReShade adapter records Vulkan pipeline metadata,
+    Evidence: an experimental x86/x64 ReShade adapter records Vulkan pipeline metadata,
     instruments a proven float2 vertex UV input into a dedicated output varying,
     patches the capture fragment input to match, replays direct/indexed/single-indirect
     draws into canonical MRTs, restores the application pipeline/attachments, and
     performs asynchronous readback through a three-slot generic fence ring. Windows
-    add-on compilation and tests of
-    a real compiled vertex fixture, malformed/ambiguous modules, and SPIR-V Tools
-    validation pass. A patched combined image-sampler variant captures source color;
+    add-on compilation and tests of a real compiled vertex fixture,
+    malformed/ambiguous modules, and SPIR-V Tools validation pass. Native x86/x64
+    Vulkan driver tests execute the instrumented four-MRT pipeline and validate IDs,
+    UVs, gradients, depth, fence/readback, and clone/covered-texel replacement isolation
+    on NVIDIA. A patched combined image-sampler variant captures source color;
     transfer-source RGBA8/BGRA8 images gain coverage-row uploads and isolated
-    bounded-table replacement. SwiftShader/driver replay, separate source descriptors,
-    native replacement tests,
-    device loss, x86, and real-game evidence remain.
+    bounded-table replacement. Full ReShade adapter replay, separate source descriptors,
+    device loss, AMD/Intel/SwiftShader, and real-game evidence remain.
 [~] Support indexed, non-indexed, instanced, and indirect draws.
     Evidence: D3D10 handles direct/indexed instanced draws (the API has no general
     indirect draw), and D3D11 handles direct and indirect indexed/non-indexed instanced draws,
     with application draw, capture replay, and replacement verified under WARP.
     D3D12 now has matching direct/indexed/indirect dispatch code and WARP-tested command
     signatures/readback resources and an actual direct backend replay. Vulkan has
-    matching code for direct/indexed and single-command indirect replay, but only
-    compile/SPIR-V validation so far. Production companion-PSO creation evidence
+    matching code for direct/indexed and single-command indirect replay plus native
+    driver execution of its direct instrumented pipeline. Production companion-PSO creation evidence
     remains for both explicit APIs; D3D9 direct/indexed evidence passes on HAL.
 [~] Restore every touched pipeline, descriptor, target, depth, UAV, and dynamic state.
     Evidence: D3D11 replay restores pixel shader and dynamic-linkage instances,

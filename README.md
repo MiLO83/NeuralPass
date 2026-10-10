@@ -151,6 +151,12 @@ JSON evidence report. Pass a DXGI device index when testing a non-default adapte
 See [`docs/compatibility.md`](docs/compatibility.md) for the API support matrix,
 safety policy, diagnostics, and troubleshooting sequence.
 
+Both packages include `Validate NeuralPass Vulkan.cmd`. It creates a real Vulkan
+device and graphics pipeline, executes NeuralPass's instrumented four-target capture,
+then proves a cloned replacement can patch one covered texel without changing the
+application source or uncovered texels. The resulting JSON records the process
+tested executable architecture, display adapters, output, and pass/skip/failure status.
+
 ## Prompt-driven live restyling
 
 The optional legacy StreamDiffusion bridge performs semantic img2img restyling at
@@ -303,8 +309,9 @@ backend without starting the game.
 
 ## Important limitations
 
-- Geometry-aware persistent baking has native D3D9 and D3D10/D3D11 WARP tests;
-  D3D12 and Vulkan remain experimental and this is not a production release.
+- Geometry-aware persistent baking has native D3D9 and D3D10/D3D11/D3D12 WARP
+  tests plus x86/x64 Vulkan driver capture/replacement tests; the explicit APIs
+  remain experimental and this is not a production release.
 - The D3D11 replay shader rejects fully transparent texels from its selected
   source texture, but cannot reproduce application-specific `discard`, custom
   alpha thresholds, or opacity sourced from another texture yet.

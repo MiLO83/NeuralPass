@@ -11,6 +11,7 @@ option(NEURALPASS_TEST_DIRECTML "Execute DirectML inference tests (requires a GP
 set(RESHADE_SDK_DIR "" CACHE PATH "Path to a ReShade checkout (must contain include/reshade.hpp)")
 set(ONNXRUNTIME_ROOT "" CACHE PATH "Optional ONNX Runtime DirectML package root")
 set(NEURALPASS_EXTERNAL_WORKER "" CACHE FILEPATH "Optional x64 NeuralPassWorker.exe for Win32 tests/package")
+set(VULKAN_HEADERS_DIR "" CACHE PATH "Optional Vulkan-Headers checkout for native runtime tests")
 
 add_library(neuralpass_core STATIC
     src/atlas_cache.cpp
@@ -50,6 +51,16 @@ if(NEURALPASS_BUILD_TESTS)
     target_compile_features(neuralpass_worker_protocol_tests PRIVATE cxx_std_20)
     add_test(NAME neuralpass_worker_protocol COMMAND neuralpass_worker_protocol_tests)
     if(WIN32)
+        if(VULKAN_HEADERS_DIR AND EXISTS "${VULKAN_HEADERS_DIR}/include/vulkan/vulkan.h")
+            add_executable(neuralpass_vulkan_runtime_tests tests/vulkan_runtime_tests.cpp)
+            target_include_directories(neuralpass_vulkan_runtime_tests PRIVATE
+                addon tests "${VULKAN_HEADERS_DIR}/include")
+            target_compile_features(neuralpass_vulkan_runtime_tests PRIVATE cxx_std_20)
+            target_compile_definitions(neuralpass_vulkan_runtime_tests PRIVATE
+                WIN32_LEAN_AND_MEAN NOMINMAX VK_NO_PROTOTYPES)
+            add_test(NAME neuralpass_vulkan_runtime COMMAND neuralpass_vulkan_runtime_tests)
+            set_tests_properties(neuralpass_vulkan_runtime PROPERTIES SKIP_RETURN_CODE 77)
+        endif()
         add_executable(neuralpass_d3d9_capture_tests
             addon/d3d9_surface_capture.cpp
             tests/d3d9_capture_tests.cpp)

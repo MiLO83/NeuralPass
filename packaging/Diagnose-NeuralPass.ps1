@@ -50,6 +50,7 @@ $names = @(
     'd3d10.dll', 'd3d11.dll', 'd3d12.dll', 'opengl32.dll', 'onnxruntime.dll',
     'onnxruntime_providers_shared.dll', 'DirectML.dll', 'NeuralPass.install.json',
     'NeuralPassWorker.exe', 'NeuralPassHardwareTest.exe', 'NeuralPass-hardware-0.json',
+    'NeuralPassVulkanTest.exe', 'NeuralPass-vulkan-runtime.json',
     'NeuralPass/PACKAGE.json', 'NeuralPass/SBOM.spdx.json', 'NeuralPass/SHA256SUMS.txt'
 )
 foreach ($name in $names) {
@@ -104,6 +105,13 @@ if ($hardwareReport) {
         Add-Line "- $($hardwareReport.Name): passed $($hardware.passed); DirectML device $($hardware.directml_device_id); model $($hardware.model)"
     } catch { Add-Line "! unreadable hardware report: $($_.Exception.Message)" }
 } else { Add-Line '- no hardware validation report found' }
+$vulkanReport = Join-Path $target 'NeuralPass-vulkan-runtime.json'
+if (Test-Path -LiteralPath $vulkanReport -PathType Leaf) {
+    try {
+        $vulkan = Get-Content -LiteralPath $vulkanReport -Raw | ConvertFrom-Json
+        Add-Line "- Vulkan runtime: passed $($vulkan.passed); skipped $($vulkan.skipped); executable $($vulkan.executable_architecture)"
+    } catch { Add-Line "! unreadable Vulkan report: $($_.Exception.Message)" }
+} else { Add-Line '- no Vulkan runtime validation report found' }
 Add-Line ''
 Add-Line 'Safety markers:'
 $markers = @('EasyAntiCheat', 'EasyAntiCheat_EOS', 'BattlEye', 'BEDaisy.sys', 'vgk.sys', 'FACEIT', 'ESEA')

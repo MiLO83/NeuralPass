@@ -25,10 +25,14 @@ REQUIRED = {
     "Install-NeuralPass.ps1",
     "Uninstall-NeuralPass.ps1",
     "Diagnose-NeuralPass.ps1",
+    "NeuralPassVulkanTest.exe",
+    "Validate NeuralPass Vulkan.cmd",
+    "Validate-NeuralPassVulkan.ps1",
     "PACKAGE.json",
     "SBOM.spdx.json",
     "SHA256SUMS.txt",
     "third-party/ReShade-LICENSE.txt",
+    "third-party/Vulkan-Headers-LICENSE.txt",
 }
 
 
@@ -74,7 +78,7 @@ def validate_sbom(root: Path, metadata: dict, mode: str) -> None:
     if document.get("creationInfo", {}).get("created") != metadata.get("created_utc"):
         raise SystemExit("SBOM timestamp does not match package provenance")
     packages = {item.get("name"): item for item in document.get("packages", [])}
-    required_packages = {"NeuralPass", "ReShade"}
+    required_packages = {"NeuralPass", "ReShade", "Vulkan-Headers"}
     if mode == "directml":
         required_packages.update({"ONNX Runtime", "DirectML"})
         manifest = json.loads((root / "models" / "manifest.json").read_text(encoding="utf-8"))
@@ -138,6 +142,8 @@ def main() -> int:
     expected_machine = {"windows-x64": 0x8664, "windows-x86": 0x014C}[architecture]
     if pe_machine(root / addon) != expected_machine:
         raise SystemExit(f"add-on PE architecture does not match {architecture}")
+    if pe_machine(root / "NeuralPassVulkanTest.exe") != expected_machine:
+        raise SystemExit(f"Vulkan evidence runner PE architecture does not match {architecture}")
     expected: dict[str, str] = {}
     for line in (root / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines():
         checksum, marker = line.split(" ", 1)

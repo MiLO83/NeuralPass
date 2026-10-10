@@ -120,7 +120,8 @@ foreach ($optional in @('onnxruntime.dll', 'onnxruntime_providers_shared.dll', '
     }
 }
 foreach ($optional in @('NeuralPassHardwareTest.exe', 'Validate NeuralPass Hardware.cmd',
-                         'Validate-NeuralPassHardware.ps1')) {
+                         'Validate-NeuralPassHardware.ps1', 'NeuralPassVulkanTest.exe',
+                         'Validate NeuralPass Vulkan.cmd', 'Validate-NeuralPassVulkan.ps1')) {
     if (Test-Path -LiteralPath (Join-Path $package $optional)) {
         $entries += @{ Source = $optional; Destination = $optional }
     }

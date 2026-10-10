@@ -70,6 +70,7 @@ if /I "%NP_MODE%"=="directml" if /I "%NP_ARCH%"=="x86" if not exist "%NP_WORKER_
       -DCMAKE_SUPPRESS_REGENERATION=ON ^
       -DNEURALPASS_TEST_DIRECTML=OFF ^
       -DRESHADE_SDK_DIR="%NP_ROOT%\external\reshade" ^
+      -DVULKAN_HEADERS_DIR="%NP_ROOT%\external\vulkan-headers" ^
       -DONNXRUNTIME_ROOT="%NP_ROOT%\external\onnxruntime"
     if errorlevel 1 goto :failed
     cmake --build "%NP_WORKER_BUILD%" --config Release --target NeuralPassWorker neuralpass_onnx_smoke_tests --parallel
@@ -86,6 +87,7 @@ if /I "%NP_MODE%"=="directml" (
           -DNEURALPASS_TEST_DIRECTML=OFF ^
           -DNEURALPASS_EXTERNAL_WORKER="%NP_WORKER_BUILD%\Release\NeuralPassWorker.exe" ^
           -DRESHADE_SDK_DIR="%NP_ROOT%\external\reshade" ^
+          -DVULKAN_HEADERS_DIR="%NP_ROOT%\external\vulkan-headers" ^
           -DONNXRUNTIME_ROOT=
     ) else (
         cmake -S "%NP_ROOT%" -B "%NP_BUILD%" -A %NP_CMAKE_ARCH% ^
@@ -94,6 +96,7 @@ if /I "%NP_MODE%"=="directml" (
           -DCMAKE_SUPPRESS_REGENERATION=ON ^
           -DNEURALPASS_TEST_DIRECTML=%NP_DIRECTML_TEST% ^
           -DRESHADE_SDK_DIR="%NP_ROOT%\external\reshade" ^
+          -DVULKAN_HEADERS_DIR="%NP_ROOT%\external\vulkan-headers" ^
           -DONNXRUNTIME_ROOT="%NP_ROOT%\external\onnxruntime"
     )
 ) else (
@@ -103,6 +106,7 @@ if /I "%NP_MODE%"=="directml" (
       -DCMAKE_SUPPRESS_REGENERATION=ON ^
       -DNEURALPASS_TEST_DIRECTML=OFF ^
       -DRESHADE_SDK_DIR="%NP_ROOT%\external\reshade" ^
+      -DVULKAN_HEADERS_DIR="%NP_ROOT%\external\vulkan-headers" ^
       -DONNXRUNTIME_ROOT=
 )
 if errorlevel 1 goto :failed
@@ -133,6 +137,11 @@ if errorlevel 1 (
     echo ERROR: The expected add-on was not produced.
     goto :failed
 )
+copy /Y "%NP_BUILD%\Release\neuralpass_vulkan_runtime_tests.exe" "%NP_DIST%\NeuralPassVulkanTest.exe" >nul
+if errorlevel 1 (
+    echo ERROR: The native Vulkan evidence runner was not produced.
+    goto :failed
+)
 copy /Y "%NP_ROOT%\shaders\NeuralPass.fx" "%NP_DIST%\reshade-shaders\Shaders\NeuralPass.fx" >nul
 copy /Y "%NP_ROOT%\README.md" "%NP_DIST%\README.md" >nul
 copy /Y "%NP_ROOT%\LICENSE" "%NP_DIST%\LICENSE.txt" >nul
@@ -145,7 +154,10 @@ copy /Y "%NP_ROOT%\packaging\Diagnose NeuralPass.cmd" "%NP_DIST%\Diagnose Neural
 copy /Y "%NP_ROOT%\packaging\Install-NeuralPass.ps1" "%NP_DIST%\Install-NeuralPass.ps1" >nul
 copy /Y "%NP_ROOT%\packaging\Uninstall-NeuralPass.ps1" "%NP_DIST%\Uninstall-NeuralPass.ps1" >nul
 copy /Y "%NP_ROOT%\packaging\Diagnose-NeuralPass.ps1" "%NP_DIST%\Diagnose-NeuralPass.ps1" >nul
+copy /Y "%NP_ROOT%\packaging\Validate NeuralPass Vulkan.cmd" "%NP_DIST%\Validate NeuralPass Vulkan.cmd" >nul
+copy /Y "%NP_ROOT%\packaging\Validate-NeuralPassVulkan.ps1" "%NP_DIST%\Validate-NeuralPassVulkan.ps1" >nul
 copy /Y "%NP_ROOT%\external\reshade\LICENSE.md" "%NP_DIST%\third-party\ReShade-LICENSE.txt" >nul
+copy /Y "%NP_ROOT%\external\vulkan-headers\LICENSE.md" "%NP_DIST%\third-party\Vulkan-Headers-LICENSE.txt" >nul
 
 if /I "%NP_MODE%"=="directml" (
     copy /Y "%NP_ROOT%\external\onnxruntime\lib\onnxruntime.dll" "%NP_DIST%\onnxruntime.dll" >nul
@@ -250,6 +262,12 @@ if not exist "%NP_ROOT%\external\reshade\deps\imgui\imgui.h" (
 if not exist "%NP_ROOT%\external\reshade\deps\imgui\imgui.h" (
     echo ERROR: ReShade's ImGui submodule is missing.
     exit /b 1
+)
+if not exist "%NP_ROOT%\external\vulkan-headers\include\vulkan\vulkan.h" (
+    echo       Downloading Vulkan-Headers vulkan-sdk-1.4.350.0...
+    git clone --branch vulkan-sdk-1.4.350.0 --depth 1 ^
+      https://github.com/KhronosGroup/Vulkan-Headers.git "%NP_ROOT%\external\vulkan-headers"
+    if errorlevel 1 exit /b 1
 )
 exit /b 0
 

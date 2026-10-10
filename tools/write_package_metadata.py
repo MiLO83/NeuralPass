@@ -65,6 +65,15 @@ def dependency_packages(mode: str, manifest: dict, root: Path) -> list[dict]:
         "licenseConcluded": "BSD-3-Clause",
         "licenseDeclared": "BSD-3-Clause",
         "copyrightText": "Copyright 2014 Patrick Mours",
+    }, {
+        "SPDXID": "SPDXRef-Package-VulkanHeaders",
+        "name": "Vulkan-Headers",
+        "versionInfo": "vulkan-sdk-1.4.350.0",
+        "downloadLocation": "https://github.com/KhronosGroup/Vulkan-Headers/tree/vulkan-sdk-1.4.350.0",
+        "filesAnalyzed": False,
+        "licenseConcluded": "Apache-2.0 OR MIT",
+        "licenseDeclared": "Apache-2.0 OR MIT",
+        "copyrightText": "Copyright 2015-2023 The Khronos Group Inc.",
     }]
     if mode != "directml":
         return result
