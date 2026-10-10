@@ -6,6 +6,7 @@
 #include "neuralpass/tile_scheduler.hpp"
 #include "neuralpass/inference.hpp"
 #include "neuralpass/scene_cache.hpp"
+#include "neuralpass/runtime_evidence.hpp"
 #include "neuralpass/surface_capture.hpp"
 #include "neuralpass/texture_baker.hpp"
 #include "neuralpass/visibility.hpp"
@@ -151,6 +152,44 @@ static void test_hdr_color_contract_is_bounded_and_luminance_stable() {
     require(std::isfinite(sanitized.r) && std::isfinite(sanitized.g) &&
             sanitized.r == 0.0f && sanitized.g == 0.0f,
             "non-finite HDR capture values reached inference");
+}
+
+static void test_runtime_display_evidence_json_is_exact_and_escaped() {
+    const auto json = runtime_display_evidence_json({
+        .generated_utc = "2026-01-02T03:04:05.006Z",
+        .process_architecture = "X64",
+        .graphics_api = "d3d12\"probe",
+        .graphics_api_value = 49152,
+        .width = 3840,
+        .height = 2160,
+        .backbuffer_format = "r10g10b10a2_unorm",
+        .backbuffer_format_value = 24,
+        .swapchain_color_space = "hdr10_pq",
+        .swapchain_color_space_value = 3,
+        .display_capture_supported = true,
+        .display_encoding = "hdr10_pq",
+        .hdr_path = true,
+        .classification = "compatible_format_color_space",
+    });
+    const std::string expected =
+        "{\n"
+        "  \"schema_version\": 1,\n"
+        "  \"generated_utc\": \"2026-01-02T03:04:05.006Z\",\n"
+        "  \"process_architecture\": \"X64\",\n"
+        "  \"graphics_api\": \"d3d12\\\"probe\",\n"
+        "  \"graphics_api_value\": 49152,\n"
+        "  \"width\": 3840,\n"
+        "  \"height\": 2160,\n"
+        "  \"backbuffer_format\": \"r10g10b10a2_unorm\",\n"
+        "  \"backbuffer_format_value\": 24,\n"
+        "  \"swapchain_color_space\": \"hdr10_pq\",\n"
+        "  \"swapchain_color_space_value\": 3,\n"
+        "  \"display_capture_supported\": true,\n"
+        "  \"display_encoding\": \"hdr10_pq\",\n"
+        "  \"hdr_path\": true,\n"
+        "  \"classification\": \"compatible_format_color_space\"\n"
+        "}\n";
+    require(json == expected, "runtime display evidence JSON contract changed");
 }
 
 static void test_binding_identity_is_pipeline_and_slot_specific() {
@@ -772,6 +811,7 @@ int main() {
         test_age_refresh();
         test_preview_backend_is_bounded();
         test_hdr_color_contract_is_bounded_and_luminance_stable();
+        test_runtime_display_evidence_json_is_exact_and_escaped();
         test_binding_identity_is_pipeline_and_slot_specific();
         test_depth_pyramid_and_conservative_raymarch();
         test_visibility_classifies_newly_revealed_causes();

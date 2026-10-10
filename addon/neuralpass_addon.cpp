@@ -12,6 +12,7 @@
 #include "neuralpass/cache_namespace.hpp"
 #include "neuralpass/color_pipeline.hpp"
 #include "neuralpass/inference.hpp"
+#include "neuralpass/runtime_evidence.hpp"
 #include "neuralpass/scene_cache.hpp"
 #include "neuralpass/texture_baker.hpp"
 #include "neuralpass/temporal.hpp"
@@ -24,6 +25,7 @@
 #include <array>
 #include <cmath>
 #include <condition_variable>
+#include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <deque>
@@ -176,6 +178,7 @@ std::unordered_set<std::uint64_t> g_source_overrides_loaded;
 std::unordered_map<reshade::api::device *,
     std::unique_ptr<neuralpass::capture::SurfaceCaptureBackend>> g_surface_captures;
 std::unordered_map<void *, reshade::api::color_space> g_swapchain_color_spaces;
+std::mutex g_runtime_evidence_mutex;
 
 constexpr char k_source_slot_section[] = "NeuralPass.SourceSlots";
 
@@ -1308,6 +1311,14 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::uint32_t capture_bytes_per_pixel = 4;
     reshade::api::format rejected_format = reshade::api::format::unknown;
     reshade::api::color_space rejected_color_space = reshade::api::color_space::unknown;
+    bool runtime_evidence_written = false;
+    bool runtime_evidence_write_failed = false;
+    reshade::api::device_api evidence_api = reshade::api::device_api::d3d9;
+    reshade::api::format evidence_format = reshade::api::format::unknown;
+    reshade::api::color_space evidence_color_space = reshade::api::color_space::unknown;
+    std::uint32_t evidence_width = 0;
+    std::uint32_t evidence_height = 0;
+    bool evidence_supported = false;
 };
 
 std::filesystem::path bridge_directory() {
@@ -2045,6 +2056,54 @@ struct CaptureColorContract {
     std::uint32_t bytes_per_pixel;
 };
 
+const char *api_name(reshade::api::device_api api) {
+    switch (api) {
+    case reshade::api::device_api::d3d9: return "d3d9";
+    case reshade::api::device_api::d3d10: return "d3d10";
+    case reshade::api::device_api::d3d11: return "d3d11";
+    case reshade::api::device_api::d3d12: return "d3d12";
+    case reshade::api::device_api::vulkan: return "vulkan";
+    case reshade::api::device_api::opengl: return "opengl";
+    default: return "unknown";
+    }
+}
+
+const char *format_name(reshade::api::format format) {
+    switch (format) {
+    case reshade::api::format::r8g8b8a8_unorm: return "r8g8b8a8_unorm";
+    case reshade::api::format::r8g8b8a8_unorm_srgb: return "r8g8b8a8_unorm_srgb";
+    case reshade::api::format::r8g8b8x8_unorm: return "r8g8b8x8_unorm";
+    case reshade::api::format::r8g8b8x8_unorm_srgb: return "r8g8b8x8_unorm_srgb";
+    case reshade::api::format::b8g8r8a8_unorm: return "b8g8r8a8_unorm";
+    case reshade::api::format::b8g8r8a8_unorm_srgb: return "b8g8r8a8_unorm_srgb";
+    case reshade::api::format::b8g8r8x8_unorm: return "b8g8r8x8_unorm";
+    case reshade::api::format::b8g8r8x8_unorm_srgb: return "b8g8r8x8_unorm_srgb";
+    case reshade::api::format::r16g16b16a16_float: return "r16g16b16a16_float";
+    case reshade::api::format::r10g10b10a2_unorm: return "r10g10b10a2_unorm";
+    default: return "other";
+    }
+}
+
+const char *color_space_name(reshade::api::color_space color_space) {
+    switch (color_space) {
+    case reshade::api::color_space::unknown: return "unknown";
+    case reshade::api::color_space::srgb: return "srgb";
+    case reshade::api::color_space::scrgb: return "scrgb";
+    case reshade::api::color_space::hdr10_pq: return "hdr10_pq";
+    case reshade::api::color_space::hdr10_hlg: return "hdr10_hlg";
+    default: return "other";
+    }
+}
+
+const char *encoding_name(neuralpass::DisplayEncoding encoding) {
+    switch (encoding) {
+    case neuralpass::DisplayEncoding::sdr_srgb: return "sdr_srgb";
+    case neuralpass::DisplayEncoding::scrgb_linear: return "scrgb_linear";
+    case neuralpass::DisplayEncoding::hdr10_pq: return "hdr10_pq";
+    default: return "unknown";
+    }
+}
+
 std::optional<CaptureColorContract> capture_color_contract(
         reshade::api::format format, reshade::api::color_space color_space) {
     switch (format) {
@@ -2081,6 +2140,82 @@ std::optional<CaptureColorContract> capture_color_contract(
     }
 }
 
+void write_runtime_evidence(RuntimeState &state, reshade::api::device_api api,
+                            const reshade::api::resource_desc &source_desc,
+                            reshade::api::color_space color_space,
+                            const std::optional<CaptureColorContract> &contract) {
+    const bool supported = contract.has_value();
+    if (state.runtime_evidence_written && state.evidence_api == api &&
+        state.evidence_format == source_desc.texture.format &&
+        state.evidence_color_space == color_space &&
+        state.evidence_width == source_desc.texture.width &&
+        state.evidence_height == source_desc.texture.height &&
+        state.evidence_supported == supported)
+        return;
+
+    std::lock_guard evidence_lock(g_runtime_evidence_mutex);
+    const auto target = g_addon_directory / "NeuralPass-runtime-evidence.json";
+    const auto temporary = g_addon_directory / "NeuralPass-runtime-evidence.tmp";
+    DeleteFileW(temporary.c_str());
+    SYSTEMTIME now {};
+    GetSystemTime(&now);
+    char timestamp[32] = {};
+    std::snprintf(timestamp, sizeof(timestamp), "%04u-%02u-%02uT%02u:%02u:%02u.%03uZ",
+        now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond,
+        now.wMilliseconds);
+    bool serialized = false;
+    {
+        std::ofstream output(temporary, std::ios::trunc);
+        if (output) {
+            const char *architecture =
+#if defined(_WIN64)
+                "X64";
+#else
+                "X86";
+#endif
+            output << neuralpass::runtime_display_evidence_json({
+                .generated_utc = timestamp,
+                .process_architecture = architecture,
+                .graphics_api = api_name(api),
+                .graphics_api_value = static_cast<std::uint32_t>(api),
+                .width = source_desc.texture.width,
+                .height = source_desc.texture.height,
+                .backbuffer_format = format_name(source_desc.texture.format),
+                .backbuffer_format_value =
+                    static_cast<std::uint32_t>(source_desc.texture.format),
+                .swapchain_color_space = color_space_name(color_space),
+                .swapchain_color_space_value = static_cast<std::uint32_t>(color_space),
+                .display_capture_supported = supported,
+                .display_encoding = supported ? encoding_name(contract->encoding) : "bypassed",
+                .hdr_path = supported &&
+                    contract->encoding != neuralpass::DisplayEncoding::sdr_srgb,
+                .classification = supported ? "compatible_format_color_space"
+                    : "unsupported_or_mismatched_format_color_space",
+            });
+            output.flush();
+            serialized = output.good();
+        }
+    }
+    const bool written = serialized && MoveFileExW(temporary.c_str(), target.c_str(),
+        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+    if (!written) DeleteFileW(temporary.c_str());
+    if (!written && !state.runtime_evidence_write_failed) {
+        reshade::log::message(reshade::log::level::warning,
+            "NeuralPass could not publish runtime API/HDR evidence beside the game.");
+        state.runtime_evidence_write_failed = true;
+    }
+    if (written) {
+        state.runtime_evidence_written = true;
+        state.runtime_evidence_write_failed = false;
+        state.evidence_api = api;
+        state.evidence_format = source_desc.texture.format;
+        state.evidence_color_space = color_space;
+        state.evidence_width = source_desc.texture.width;
+        state.evidence_height = source_desc.texture.height;
+        state.evidence_supported = supported;
+    }
+}
+
 void destroy_readback(reshade::api::effect_runtime *runtime, RuntimeState &state) {
     auto *device = runtime->get_device();
     for (auto &resource : state.readback) {
@@ -2096,6 +2231,8 @@ bool ensure_readback(reshade::api::effect_runtime *runtime, RuntimeState &state,
                      const reshade::api::resource_desc &source_desc,
                      reshade::api::color_space color_space) {
     const auto contract = capture_color_contract(source_desc.texture.format, color_space);
+    write_runtime_evidence(state, runtime->get_device()->get_api(), source_desc,
+                           color_space, contract);
     if (!contract) {
         if (state.rejected_format != source_desc.texture.format ||
             state.rejected_color_space != color_space) {

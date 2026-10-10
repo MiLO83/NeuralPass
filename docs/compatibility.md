@@ -74,12 +74,21 @@ Run `Diagnose NeuralPass.cmd` beside the game executable. It creates
 - package provenance, SPDX SBOM, checksums, and installation-manifest presence;
 - installed-file integrity against hashes captured during installation;
 - proxy-derived API candidates and runtime API/HDR evidence from `ReShade.log`;
+- the latest structured API/backbuffer/color-space classification emitted by the
+  loaded add-on in `NeuralPass-runtime-evidence.json`;
 - the latest packaged DirectML hardware/provider and worker-health results, when available;
 - known safety markers at the game root; and
 - the last 120 lines of `ReShade.log` when available.
 
 Review the report before sharing it. It intentionally avoids environment variables,
 user tokens, registry dumps, process lists, and arbitrary files.
+
+`NeuralPass-runtime-evidence.json` is refreshed atomically whenever the loaded
+ReShade runtime observes a changed API, backbuffer size/format, swapchain color
+space, or supported/bypassed classification. A supported HDR entry therefore proves
+that NeuralPass saw FP16 with declared scRGB or RGB10A2 with declared HDR10/PQ in
+that game session. It does not prove visual quality, display calibration, or a soak
+test; those remain hardware/game acceptance gates.
 
 The x64 DirectML package additionally includes `Validate NeuralPass Hardware.cmd`.
 It runs the packaged model through DirectML and writes

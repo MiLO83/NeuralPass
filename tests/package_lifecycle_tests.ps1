@@ -161,11 +161,35 @@ try {
         throw 'installed worker-health evidence has invalid architecture or recovery data'
     }
 
+    # Diagnostics must prefer structured evidence emitted by the live add-on over
+    # proxy-name guesses. The add-on writer itself is compiled in both architectures;
+    # this fixture verifies the packaged consumer and schema contract.
+    [ordered]@{
+        schema_version = 1
+        generated_utc = '2026-01-02T03:04:05.006Z'
+        process_architecture = $expectedClientArchitecture
+        graphics_api = 'd3d12'
+        graphics_api_value = 49152
+        width = 3840
+        height = 2160
+        backbuffer_format = 'r10g10b10a2_unorm'
+        backbuffer_format_value = 24
+        swapchain_color_space = 'hdr10_pq'
+        swapchain_color_space_value = 3
+        display_capture_supported = $true
+        display_encoding = 'hdr10_pq'
+        hdr_path = $true
+        classification = 'compatible_format_color_space'
+    } | ConvertTo-Json | Set-Content -LiteralPath (
+        Join-Path $game 'NeuralPass-runtime-evidence.json') -Encoding UTF8
+
     & (Join-Path $packageRoot 'Diagnose-NeuralPass.ps1') -TargetPath $game
     $diagnostics = Get-Content -LiteralPath (Join-Path $game 'NeuralPass-diagnostics.txt') -Raw
     if ($diagnostics -notmatch 'Package provenance:' -or
         $diagnostics -notmatch 'Installed file integrity:[\s\S]*PASS:' -or
         $diagnostics -notmatch 'Managed models:[\s\S]*candy: verified' -or
+        $diagnostics -notmatch 'Authoritative live runtime evidence:[\s\S]*API d3d12' -or
+        $diagnostics -notmatch 'encoding hdr10_pq; HDR path True' -or
         $diagnostics -notmatch 'Vulkan runtime: passed' -or
         $diagnostics -notmatch 'Worker health: passed True') {
         throw 'diagnostics did not verify package provenance and installed files'

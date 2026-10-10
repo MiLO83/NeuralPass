@@ -176,6 +176,13 @@ then proves a cloned replacement can patch one covered texel without changing th
 application source or uncovered texels. The resulting JSON records the process
 tested executable architecture, display adapters, output, and pass/skip/failure status.
 
+Once the add-on reaches ReShade's effects pass, it atomically writes
+`NeuralPass-runtime-evidence.json` beside the game. This records the actual graphics
+API, process architecture, backbuffer dimensions and format, declared swapchain color
+space, and whether the exact format/color-space pair selected SDR, scRGB, HDR10/PQ,
+or a safe bypass. Diagnostics consumes this structured report; proxy DLL names remain
+only pre-launch candidates, not proof of the live API or HDR path.
+
 ## Prompt-driven live restyling
 
 The optional legacy StreamDiffusion bridge performs semantic img2img restyling at

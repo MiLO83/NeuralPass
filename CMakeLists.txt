@@ -20,6 +20,7 @@ add_library(neuralpass_core STATIC
     src/color_pipeline.cpp
     src/depth_pyramid.cpp
     src/inference_preview.cpp
+    src/runtime_evidence.cpp
     src/scene_cache.cpp
     src/surface_capture.cpp
     src/temporal.cpp

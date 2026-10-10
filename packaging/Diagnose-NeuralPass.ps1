@@ -56,6 +56,7 @@ $names = @(
     'NeuralPass-worker-health.json',
     'Update NeuralPass.cmd', 'Update-NeuralPass.ps1',
     'Manage NeuralPass Models.cmd', 'Manage-NeuralPassModels.ps1',
+    'NeuralPass-runtime-evidence.json',
     'NeuralPassVulkanTest.exe', 'NeuralPass-vulkan-runtime.json',
     'NeuralPass/PACKAGE.json', 'NeuralPass/SBOM.spdx.json', 'NeuralPass/SHA256SUMS.txt'
 )
@@ -119,6 +120,28 @@ if (Test-Path -LiteralPath $modelManifestPath -PathType Leaf) {
         }
     } catch { Add-Line "! unreadable model manifest: $($_.Exception.Message)" }
 } else { Add-Line '- model manifest not installed' }
+Add-Line ''
+Add-Line 'Authoritative live runtime evidence:'
+$runtimeEvidencePath = Join-Path $target 'NeuralPass-runtime-evidence.json'
+if (Test-Path -LiteralPath $runtimeEvidencePath -PathType Leaf) {
+    try {
+        $runtimeEvidence = Get-Content -LiteralPath $runtimeEvidencePath -Raw |
+            ConvertFrom-Json
+        if ($runtimeEvidence.schema_version -ne 1 -or
+            [string]::IsNullOrWhiteSpace([string]$runtimeEvidence.graphics_api) -or
+            [string]::IsNullOrWhiteSpace([string]$runtimeEvidence.backbuffer_format) -or
+            [string]::IsNullOrWhiteSpace([string]$runtimeEvidence.swapchain_color_space)) {
+            throw 'unsupported or incomplete runtime evidence schema'
+        }
+        Add-Line "- observed $($runtimeEvidence.generated_utc) by the loaded ReShade add-on"
+        Add-Line "- API $($runtimeEvidence.graphics_api); process $($runtimeEvidence.process_architecture); $($runtimeEvidence.width)x$($runtimeEvidence.height)"
+        Add-Line "- backbuffer $($runtimeEvidence.backbuffer_format); swapchain color space $($runtimeEvidence.swapchain_color_space)"
+        Add-Line "- display capture supported $($runtimeEvidence.display_capture_supported); encoding $($runtimeEvidence.display_encoding); HDR path $($runtimeEvidence.hdr_path)"
+        Add-Line "- classification $($runtimeEvidence.classification)"
+    } catch { Add-Line "! unreadable runtime evidence: $($_.Exception.Message)" }
+} else {
+    Add-Line '- no live report; launch the game through ReShade to observe API and HDR state'
+}
 Add-Line ''
 Add-Line 'Latest hardware/provider evidence:'
 $hardwareReport = Get-ChildItem -LiteralPath $target -Filter 'NeuralPass-hardware-*.json' -File |
