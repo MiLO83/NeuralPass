@@ -7,8 +7,8 @@ game framebuffer
       |                                            |
       |                                      worker thread
       |                               temporal confidence/rejection
-      |                                  dilate + prioritize tiles
-      |                                      ONNX/preview backend
+      |                              one coherent frame composition
+      |                               SD-Turbo or ONNX/preview backend
       |                                            |
       +--> other ReShade effects --> NeuralPass compositor --> Present
                                          ^
@@ -24,12 +24,12 @@ occupied, providing natural backpressure.
 Full-resolution display and mesh-surface readback are also paced to one capture
 per eight effect frames by default. The compositor keeps presenting the last
 persistent result between samples, bounding GPU copies and per-pixel CPU decoding
-independently of the worker's tile budget. The overlay can adjust the interval.
+independently of inference cadence. The overlay can adjust the interval.
 
 On Win32, model execution crosses into the packaged x64 `NeuralPassWorker.exe`
 because the pinned ONNX Runtime DirectML distribution has no Win32 binaries. A
 random per-process named pipe carries fixed-size versioned control records; one
-private 8 MiB file mapping carries exactly one float RGBA tile at a time. The
+private 8 MiB file mapping carries one coherently resized float RGBA frame. The
 add-on never passes handles or pointers across architectures. Width, height, and
 payload bounds are validated at both ends, and the response must echo the request,
 scene, style, and visible-binding generations. A disconnect causes one clean worker
@@ -49,7 +49,7 @@ model-content fingerprint. A preset transition saves the outgoing namespace,
 invalidates its in-flight screen history and GPU replacements, increments the
 style generation, and loads only the incoming namespace. Binding keys below that
 point retain shader, descriptor/source, and immutable UV-topology identity.
-The legacy external diffusion bridge is deliberately excluded from cross-launch
+The external prompt-driven diffusion bridge is deliberately excluded from cross-launch
 atlas persistence because its model is not package-versioned. Prompt identity is
 still a live style generation: changing it clears queued frames/replacements and
 rejects a late result from the preceding prompt.
@@ -91,8 +91,9 @@ containment are checked before copying; symlinks and existing targets fail close
   frames. Validation uses both an absolute and a relative tolerance.
 - A nonzero validity byte means the styled color belongs to the associated
   source/depth history sample.
-- Tile cores form a non-overlapping grid. The padded rectangle adds inference
-  context and is clipped to the framebuffer.
+- The reusable tile scheduler retains a non-overlapping core/padded-context
+  contract for masked atlas work and tests. It is not used to assemble the
+  visible restyle: screen inference always receives one coherent frame.
 
 Future geometry-aware adapters should populate motion and depth first. A true
 canonical adapter may additionally use an `R32_UINT` object ID and
@@ -113,8 +114,8 @@ fallback. An observed texel is immutable; an inpainted texel may be replaced
 later by a real observation. Effect-environment recreation clears screen-space
 history so loading-screen pixels cannot leak into gameplay. With sticky history
 enabled, the first visual cut also clears that history, while repeated cut
-classification during sustained paced camera motion is latched so progressive
-tiles can converge. The current scene atlas survives camera cuts; confirmed new
+classification during sustained paced camera motion is latched so a coherent
+restyle can persist. The current scene atlas survives camera cuts; confirmed new
 scenes switch to an isolated namespace.
 
 `MaterialTextureBaker` owns the scene's lazily-created atlas set. Capture
@@ -396,26 +397,25 @@ The live material path is a two-phase operation. `plan` reprojects every
 covered atlas sample into the current framebuffer and emits a reveal mask only
 for visible, depth-verified UVs without real coverage. That boundary is split
 into disjoint first-observation and newly-visible masks using the live visibility
-classification. Neural work uses the masks plus a context halo, and later
-disocclusion/front-face/off-screen reveals preempt bulk initial styling when the
-tile budget is constrained. `commit` verifies that the two masks are disjoint and
+classification. The coherent styled frame supplies all accepted samples;
+disocclusion/front-face/off-screen reveals remain higher-priority atlas evidence.
+`commit` verifies that the two masks are disjoint and
 their union exactly matches the original reveal boundary before accepting any
 pixel, so ordinary camera motion never restyles established material texels and
 unsupported pixels remain on the live screen-space fallback.
 
-Tile admission is governed by an asymmetric frame-time controller in the worker.
-The render callback only records cadence and submits bounded readbacks; it never
-waits for inference. A missed target, expensive tile near the target, or dropped
-capture backlog removes one admitted tile immediately, down to the configured
-minimum. Recovery is deliberately slower: 30 consecutive observations below 90%
-of the target admit one additional tile. This is a conservative GPU-headroom proxy
-rather than a vendor-specific utilization
-query, so it works identically for x64 in-process and x86-to-x64 worker paths.
-Newly-visible inpainting retains priority within whatever budget is admitted.
-The shipped add-on configures a one-tile minimum: even when a game's baseline is
-below the selected target, initial styling and later reveals must continue making
-bounded progress instead of leaving a permanent isolated tile. The reusable
-controller still supports a zero minimum for callers that require full suspension.
+Inference admission is governed by frame cadence and bounded latest-frame
+mailboxes. The render callback only records cadence and submits readbacks; it never
+waits for inference. Each admitted update is one full composition. A newer capture
+is dropped while work is pending, preventing queues of stale viewpoints, while the
+last complete styled frame remains visible until its replacement is ready. This
+policy is identical for x64 in-process and x86-to-x64 worker paths.
+
+Depth is a separate geometric signal, not image brightness. A future dense-depth
+conditioning path will linearize the game's depth buffer (including reversed-Z,
+near/far planes, sky, and invalid samples) into the familiar black-near/white-far
+map. Sparse per-material depth already validates UV observations, but it is not
+silently expanded into a fake fullscreen ControlNet input.
 
 Every asynchronous plan carries both a baker epoch and scene key. An image-space
 cut bumps the epoch immediately, resets optical-flow/temporal history, and

@@ -1366,7 +1366,7 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::atomic_uint32_t capture_interval = 8;
     std::atomic_uint64_t capture_skipped = 0;
     std::array<std::atomic_uint64_t, 6> visibility_counts {};
-    std::atomic_uint32_t tile_budget = 2;
+    std::atomic_uint32_t tile_budget = 1;
     std::atomic_uint32_t effective_tile_budget = 1;
     std::atomic_uint32_t target_frame_rate = 60;
     std::atomic_bool adaptive_tile_budget = true;
@@ -1378,7 +1378,8 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::atomic_bool reset_requested = false;
     std::atomic_bool sticky_history = true;
     // The packaged ONNX/preview backend must work without an external process.
-    // The legacy WSL StreamDiffusion bridge is explicit opt-in.
+    // Prompt-driven SD-Turbo is a persistent per-game opt-in because it requires
+    // the separately managed Python bridge.
     std::atomic_bool stream_bridge = false;
     std::atomic_uint64_t prompt_identity = 1;
     std::atomic_int scene_command = static_cast<int>(ManualSceneCommand::none);
@@ -1689,14 +1690,6 @@ void publish_replacement_snapshots(
 
 std::uint8_t byte(float value) {
     return static_cast<std::uint8_t>(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
-}
-
-Image<Color> extract(const Image<Color> &image, const neuralpass::Rect &rect) {
-    Image<Color> tile(rect.width, rect.height);
-    for (std::uint32_t y = 0; y < rect.height; ++y)
-        for (std::uint32_t x = 0; x < rect.width; ++x)
-            tile.at(x, y) = image.at(rect.x + x, rect.y + y);
-    return tile;
 }
 
 void process_frames(RuntimeState *state, std::stop_token token) {
@@ -2276,10 +2269,6 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         neuralpass::invalidate_bypassed_bindings(
             history.valid, binding_style.strength_percent);
 
-        Image<std::uint8_t> dirty(frame.width, frame.height, 0);
-        for (std::size_t i = 0; i < dirty.size(); ++i)
-            dirty.pixels()[i] = binding_style.strength_percent.pixels()[i] == 0
-                ? 0 : (history.valid.pixels()[i] ? 0 : 1);
         const auto maximum_tile_budget = state->tile_budget.load();
         const bool adaptive_budget = state->adaptive_tile_budget.load();
         if (adaptive_budget && !adaptive_was_enabled) {
@@ -2290,14 +2279,10 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             ? std::min(budget_controller.budget(), maximum_tile_budget)
             : maximum_tile_budget;
         state->effective_tile_budget = admitted_tile_budget;
-        const auto jobs = neuralpass::schedule_tiles(dirty, history.age,
-            {.tile_size=256, .halo=32, .dilation_radius=4,
-             .tile_budget=admitted_tile_budget,
-             .refresh_age=static_cast<std::uint16_t>(state->refresh_age.load())},
-            &bake_plan.inpaint_mask);
+        const bool inference_admitted = admitted_tile_budget != 0;
 
         // The cross-architecture worker echoes all four identity dimensions.
-        // A mismatched response can never be committed as a plausible tile.
+        // A mismatched response can never be committed as a plausible frame.
         std::vector<std::uint64_t> visible_bindings;
         visible_bindings.reserve(correspondence.size());
         for (const auto &sample : correspondence)
@@ -2312,23 +2297,20 @@ void process_frames(RuntimeState *state, std::stop_token token) {
                                   binding_generation});
 
         const auto inference_started = std::chrono::steady_clock::now();
-        for (const auto &job : jobs) {
+        if (inference_admitted) {
             try {
-                const auto input = extract(current, job.padded);
-                const auto output = backend->run(input);
-                const auto ox = job.core.x - job.padded.x;
-                const auto oy = job.core.y - job.padded.y;
-                for (std::uint32_t y = 0; y < job.core.height; ++y)
-                    for (std::uint32_t x = 0; x < job.core.width; ++x) {
-                        const auto dx = job.core.x + x;
-                        const auto dy = job.core.y + y;
-                        history.source.at(dx, dy) = current.at(dx, dy);
-                        history.styled.at(dx, dy) = output.at(ox + x, oy + y);
-                        history.valid.at(dx, dy) = 1;
-                        history.age.at(dx, dy) = 0;
-                    }
+                // A style network is a composition, not a per-tile color filter.
+                // Give it the complete frame so its fixed model input is derived
+                // from one coherent view, then publish the complete output at once.
+                // Geometry correspondences below ray-march this same result into
+                // persistent UV atlases; tiles never become visible compositions.
+                history.source = current;
+                history.styled = backend->run(current);
+                history.depth = Image<float>(frame.width, frame.height, 1.0f);
+                history.valid = Image<std::uint8_t>(frame.width, frame.height, 1);
+                history.age = Image<std::uint16_t>(frame.width, frame.height, 0);
                 neuralpass::apply_binding_styles(history.styled, history.valid, current,
-                    binding_style.strength_percent, job.core);
+                    binding_style.strength_percent, {0, 0, frame.width, frame.height});
             } catch (const std::exception &error) {
                 reshade::log::message(reshade::log::level::error, error.what());
             }
@@ -2338,8 +2320,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         if (adaptive_budget) {
             const auto target_fps = std::clamp(state->target_frame_rate.load(), 30u, 240u);
             budget_controller.configure({
-                // Always admit one tile so a game whose baseline frame rate is
-                // below the selected target still converges to a coherent style.
+                // Always admit one coherent pass so a game whose baseline frame
+                // rate is below the target still converges to a complete style.
                 .minimum_budget=1,
                 .maximum_budget=maximum_tile_budget,
                 .target_frame_time_ms=1000.0f / static_cast<float>(target_fps),
@@ -2347,7 +2329,7 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             const auto decision = budget_controller.observe({
                 .frame_time_ms=static_cast<float>(state->measured_frame_time_us.load()) / 1000.0f,
                 .worker_time_ms=inference_elapsed,
-                .attempted_tiles=static_cast<std::uint32_t>(jobs.size()),
+                .attempted_tiles=inference_admitted ? 1u : 0u,
                 .capture_backlog=state->dropped.load() != dropped_before_processing});
             state->effective_tile_budget = decision.tile_budget;
             state->measured_tile_time_us = static_cast<std::uint64_t>(
@@ -2355,9 +2337,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             if (decision.under_pressure) ++state->budget_pressure_events;
         } else {
             state->effective_tile_budget = maximum_tile_budget;
-            state->measured_tile_time_us = jobs.empty() ? 0 :
-                static_cast<std::uint64_t>(inference_elapsed * 1000.0f /
-                                           static_cast<float>(jobs.size()));
+            state->measured_tile_time_us = inference_admitted
+                ? static_cast<std::uint64_t>(inference_elapsed * 1000.0f) : 0;
         }
 
         std::vector<neuralpass::SurfaceCorrespondence> generated_reveals;
@@ -2745,6 +2726,8 @@ std::uint32_t find_dxgi_adapter_index(ID3D11Device *device) {
 
 void on_init(reshade::api::effect_runtime *runtime) {
     auto *state = runtime->create_private_data<RuntimeState>();
+    state->stream_bridge = std::filesystem::is_regular_file(
+        bridge_directory() / "stream.enable");
     state->directml_enabled =
         runtime->get_device()->get_api() == reshade::api::device_api::d3d11;
     if (state->directml_enabled)
@@ -3087,7 +3070,7 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
 
     // A 1080p capture entails an 8 MiB GPU readback plus per-pixel CPU color
     // conversion. Running that work on every present can dominate games before
-    // the adaptive tile budget has any work left to remove. Keep presenting the
+    // the inference admission controller can react. Keep presenting the
     // persistent styled texture while sampling the scene at a lower cadence.
     if (!capture_this_frame) {
         ++state->capture_skipped;
@@ -3136,7 +3119,7 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         static_cast<unsigned long long>(state->capture_skipped.load()));
     const auto frame_time_ms = static_cast<double>(state->measured_frame_time_us.load()) / 1000.0;
     const auto tile_time_ms = static_cast<double>(state->measured_tile_time_us.load()) / 1000.0;
-    ImGui::Text("Frame: %.2f ms  Inference/tile: %.2f ms  Active tiles: %u/%u",
+    ImGui::Text("Frame: %.2f ms  Inference pass: %.2f ms  Passes: %u/%u",
         frame_time_ms, tile_time_ms, state->effective_tile_budget.load(),
         state->tile_budget.load());
     ImGui::Text("Adaptive pressure observations: %llu",
@@ -3399,9 +3382,7 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
     int capture_interval = static_cast<int>(state->capture_interval.load());
     if (ImGui::SliderInt("Capture interval (effect frames)", &capture_interval, 1, 32))
         state->capture_interval = static_cast<std::uint32_t>(capture_interval);
-    int budget = static_cast<int>(state->tile_budget.load());
-    if (ImGui::SliderInt("Maximum tiles per worker update", &budget, 1, 16))
-        state->tile_budget = static_cast<std::uint32_t>(budget);
+    ImGui::TextDisabled("One coherent full-frame pass per worker update");
     int age = static_cast<int>(state->refresh_age.load());
     if (ImGui::SliderInt("Maximum cache age", &age, 15, 600))
         state->refresh_age = static_cast<std::uint32_t>(age);
@@ -3413,10 +3394,19 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
     if (ImGui::Combo("Preset", &preset, k_presets.data(), static_cast<int>(k_presets.size())))
         state->requested_preset = preset;
     bool stream_bridge = state->stream_bridge.load();
-    if (ImGui::Checkbox("Prompt-driven StreamDiffusion", &stream_bridge)) {
+    if (ImGui::Checkbox("Prompt-driven SD-Turbo", &stream_bridge)) {
         state->stream_bridge = stream_bridge;
         state->bridge_sent = 0;
         state->bridge_received = 0;
+        std::error_code error;
+        std::filesystem::create_directories(bridge_directory(), error);
+        const auto marker = bridge_directory() / "stream.enable";
+        if (stream_bridge) {
+            std::ofstream output(marker, std::ios::trunc);
+            output << "Prompt-driven SD-Turbo enabled for this game.\n";
+        } else {
+            std::filesystem::remove(marker, error);
+        }
     }
     const char *history_preview = state->prompt_history_selected >= 0 &&
         state->prompt_history_selected < static_cast<int>(state->prompt_history.size())

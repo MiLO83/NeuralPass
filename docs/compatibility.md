@@ -17,7 +17,7 @@ full add-on build of ReShade. It is not suitable for protected multiplayer games
 | SDR RGBA8 | Supported preview path |
 | HDR / scRGB | Experimental FP16 scRGB and RGB10A2 HDR10/PQ paths with declared-color-space validation and luminance-preserving composition; monitor/game validation pending |
 | DirectML | Game-device DXGI adapter is selected by LUID; model execution smoke-tested on NVIDIA; packaged evidence test supports explicit adapter indices; AMD and Intel evidence remains |
-| CUDA | Legacy Python bridge only; not part of the managed package |
+| CUDA | Preferred coherent SD-Turbo/StreamDiffusion bridge validated on NVIDIA RTX 5060 Ti; not yet part of the managed package |
 | x86 games | Experimental `addon32` package launches the x64 ONNX/DirectML worker over bounded shared memory; real-game validation pending |
 
 Unsupported capture paths fall back to the screen-space compositor. They do not
@@ -29,10 +29,12 @@ that signal to bounded sRGB before inference and converts the styled result back
 in the final shader. HLG, unknown color spaces, and mismatched format/color-space
 pairs are bypassed rather than treated as plausible HDR.
 
-The legacy prompt-driven StreamDiffusion/WSL bridge is disabled by default and
-is not required by either package. Enable it only after separately starting its
-Python environment. This is distinct from the packaged `NeuralPassWorker.exe`,
-which provides fixed-model ONNX inference to the 32-bit add-on without WSL.
+The prompt-driven SD-Turbo/StreamDiffusion bridge is disabled by default for a
+new game and is not required by either package. Enable it only after separately
+starting its Python environment. The selection persists per game in
+`NeuralPassBridge/stream.enable`. This is distinct from the packaged
+`NeuralPassWorker.exe`, which provides fixed-model ONNX inference to the 32-bit
+add-on without WSL.
 
 ## Safe installation
 

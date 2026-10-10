@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <mutex>
 #include <stdexcept>
@@ -13,6 +14,56 @@
 
 namespace neuralpass {
 namespace {
+
+Color sample_bilinear(const Image<Color> &image, float x, float y) {
+    x = std::clamp(x, 0.0f, static_cast<float>(image.width() - 1));
+    y = std::clamp(y, 0.0f, static_cast<float>(image.height() - 1));
+    const auto x0 = static_cast<std::uint32_t>(x);
+    const auto y0 = static_cast<std::uint32_t>(y);
+    const auto x1 = std::min(x0 + 1, image.width() - 1);
+    const auto y1 = std::min(y0 + 1, image.height() - 1);
+    const float tx = x - static_cast<float>(x0);
+    const float ty = y - static_cast<float>(y0);
+    const auto lerp = [](float a, float b, float t) { return a + (b - a) * t; };
+    const Color top {
+        lerp(image.at(x0, y0).r, image.at(x1, y0).r, tx),
+        lerp(image.at(x0, y0).g, image.at(x1, y0).g, tx),
+        lerp(image.at(x0, y0).b, image.at(x1, y0).b, tx), 1.0f};
+    const Color bottom {
+        lerp(image.at(x0, y1).r, image.at(x1, y1).r, tx),
+        lerp(image.at(x0, y1).g, image.at(x1, y1).g, tx),
+        lerp(image.at(x0, y1).b, image.at(x1, y1).b, tx), 1.0f};
+    return {lerp(top.r, bottom.r, ty), lerp(top.g, bottom.g, ty),
+            lerp(top.b, bottom.b, ty), 1.0f};
+}
+
+Image<Color> resize_image(const Image<Color> &input, std::uint32_t width,
+                          std::uint32_t height) {
+    if (input.width() == width && input.height() == height) return input;
+    Image<Color> output(width, height);
+    const float scale_x = static_cast<float>(input.width()) / static_cast<float>(width);
+    const float scale_y = static_cast<float>(input.height()) / static_cast<float>(height);
+    for (std::uint32_t y = 0; y < height; ++y)
+        for (std::uint32_t x = 0; x < width; ++x)
+            output.at(x, y) = sample_bilinear(
+                input, (static_cast<float>(x) + 0.5f) * scale_x - 0.5f,
+                (static_cast<float>(y) + 0.5f) * scale_y - 0.5f);
+    return output;
+}
+
+Image<Color> fit_worker_mailbox(const Image<Color> &input) {
+    if (input.width() <= worker::k_max_dimension &&
+        input.height() <= worker::k_max_dimension)
+        return input;
+    const float scale = std::min(
+        static_cast<float>(worker::k_max_dimension) / static_cast<float>(input.width()),
+        static_cast<float>(worker::k_max_dimension) / static_cast<float>(input.height()));
+    const auto width = std::max(1u, static_cast<std::uint32_t>(
+        std::lround(static_cast<float>(input.width()) * scale)));
+    const auto height = std::max(1u, static_cast<std::uint32_t>(
+        std::lround(static_cast<float>(input.height()) * scale)));
+    return resize_image(input, width, height);
+}
 
 bool write_exact(HANDLE handle, const void *data, DWORD size) {
     const auto *cursor = static_cast<const std::uint8_t *>(data);
@@ -77,15 +128,18 @@ public:
 
     Image<Color> run(const Image<Color> &input) override {
         std::lock_guard lock(mutex_);
+        const auto prepared = fit_worker_mailbox(input);
+        Image<Color> output;
         try {
-            return exchange(input);
+            output = exchange(prepared);
         } catch (...) {
             // A worker is disposable. Restart once so a provider/device reset does
             // not permanently disable inference in the host process.
             stop();
             start();
-            return exchange(input);
+            output = exchange(prepared);
         }
+        return resize_image(output, input.width(), input.height());
     }
 
 private:
@@ -194,7 +248,7 @@ private:
         request.payload_bytes = static_cast<std::uint32_t>(
             input.size() * 4 * sizeof(float));
         if (!worker::valid_image(request))
-            throw std::runtime_error("inference tile exceeds bounded worker mailbox");
+            throw std::runtime_error("inference frame exceeds bounded worker mailbox");
         for (std::size_t index = 0; index < input.size(); ++index) {
             shared_[index * 4 + 0] = input.pixels()[index].r;
             shared_[index * 4 + 1] = input.pixels()[index].g;

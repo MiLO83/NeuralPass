@@ -5,17 +5,18 @@ instruction, “please continue.”
 
 [![CI](https://github.com/MiLO83/NeuralPass/actions/workflows/ci.yml/badge.svg)](https://github.com/MiLO83/NeuralPass/actions/workflows/ci.yml)
 
-NeuralPass is a persistent sparse neural post-process for ReShade. It keeps a
+NeuralPass is a persistent neural restyling post-process for ReShade. It keeps a
 styled framebuffer alive across frames, rejects history that no longer matches
-the scene, and sends only dirty or expired 256-pixel tiles through an inference
-backend. The final `.fx` pass blends completed tiles immediately before the
-framebuffer is presented.
+the scene, and sends one coherent full-frame composition through an inference
+backend. The final `.fx` pass blends the completed frame immediately before the
+framebuffer is presented. Compatible geometry is also projected into persistent
+material UV atlases so later viewpoints can reuse already restyled texels.
 
 This repository currently contains a working **research-preview** pipeline:
 
-- deterministic temporal rejection and dirty-tile scheduling;
-- progressive dirty-tile bootstrap with 32-pixel inference halos and an adaptive
-  frame-time/backlog budget;
+- deterministic temporal rejection and coherent full-frame scheduling;
+- prompt-driven SD-Turbo/StreamDiffusion with optical-flow persistence, plus
+  whole-frame ONNX and preview fallbacks;
 - an asynchronous add-on worker that never waits in the presentation path;
 - ONNX Runtime/DirectML inference when configured at build time;
 - checksum-pinned Candy, Mosaic, Rain Princess, and Udnie model downloads;
@@ -78,8 +79,9 @@ The first downloads every bundled art model. The second omits ONNX Runtime and
 builds the x64 temporal pipeline with its clearly-labelled preview backend. The
 third builds/tests a Win32 add-on and creates `dist\NeuralPass-x86` with an x64
 `NeuralPassWorker.exe`. Microsoft's current ONNX Runtime DirectML package has no
-Win32 runtime, so the add-on exchanges bounded tiles with that architecture-matched
-host through a private named pipe and an 8 MiB shared-memory mailbox. Guided installs
+Win32 runtime, so the add-on fits a coherent frame into the architecture-matched
+host's private named pipe and 8 MiB shared-memory mailbox, then restores the output
+to display size. Guided installs
 place the worker and its private runtime DLLs under `NeuralPass/runtime`, away from
 game-root graphics proxy DLLs. The fourth
 command remains useful when a fully self-contained non-neural Win32 preview is wanted.
@@ -148,24 +150,18 @@ For a manual installation:
    optionally set the launch default.
 5. Enable **NeuralPass (keep last)** and place it last in ReShade's technique order.
 
-On first use the untouched game image remains visible while styled tiles fill
-progressively. Press ReShade's reload button to clear effect textures. Use the
-validity debug view to see which pixels currently have persistent styled data.
+On first use the untouched game image remains visible until the first coherent
+styled frame is ready. Press ReShade's reload button to clear effect textures. Use
+the validity debug view to see which pixels currently have persistent styled data.
 
 The add-on intentionally drops capture frames when inference is behind. It
-never queues an unbounded amount of work or blocks the game waiting for a tile.
+never queues an unbounded amount of work or blocks the game waiting for inference.
 Full-resolution display and mesh-surface readback are paced to one capture per
 eight effect frames by default while the compositor continuously presents the last
 persistent result; the interval is adjustable in the overlay. This keeps GPU
-copies and CPU color/surface decoding from dominating render cadence after tile
-inference has backed off.
-Adaptive budgeting is enabled by default: it sheds one tile immediately when
-smoothed frame pacing misses the selected target or capture work backs up, but
-retains one progressive tile so games below the selected target cannot strand a
-visible partial restyle forever. Additional tiles return only after 30 healthy
-worker observations. The overlay exposes the target frame rate,
-maximum and active tile counts, frame time, per-tile inference time, and pressure
-counter; disabling adaptation restores the selected fixed maximum.
+copies and CPU color/surface decoding from dominating render cadence. One coherent
+pass is admitted per worker update; the overlay reports capture cadence, frame time,
+inference-pass time, and pressure observations.
 In the DirectML build, D3D11 uses the DirectML execution provider; other graphics
 APIs use ONNX Runtime's CPU provider until their device-loss stress gates pass.
 The x86 add-on launches the packaged x64 worker for either provider and restarts it
@@ -205,8 +201,11 @@ proxy DLL names remain only pre-launch candidates, not proof of a live adapter p
 
 ## Prompt-driven live restyling
 
-The optional legacy StreamDiffusion bridge performs semantic img2img restyling at
-512x288 and sends completed frames back to the ReShade compositor. The default
+The preferred prompt-driven path uses SD-Turbo through StreamDiffusion for one
+coherent 512x288 img2img composition and sends completed frames back to the ReShade
+compositor. The fixed-style ONNX models remain a package-local compatibility
+fallback and are also evaluated as one complete composition, never as visible
+independent tiles. The default
 prompt is `Santa's North Pole Workshop`. A CUDA RIFE 4.9 pass inserts one motion
 compensated midpoint between generated frames when requested; it is disabled by
 default because the continuous flow-warp path supersedes burst playback. Use
@@ -230,10 +229,9 @@ retaining the same screen flow -> {local UVW, world UVW} -> RGB contract.
 Adjust the additional temporal anchor with `--temporal-strength` (default
 `0.28`, maximum useful value `0.35`).
 
-The moved WSL environment in the original development machine currently lacks
-PyTorch and ONNX Runtime. The following command is valid only after those
-dependencies have been restored in `external/stream-venv`; it is not the final
-managed-worker experience:
+The development environment has been validated with PyTorch CUDA 12.8 on an
+NVIDIA RTX 5060 Ti. It is still a separately managed Python environment rather
+than part of the signed/checksummed Windows package:
 
 ```sh
 cd /home/topnotch/github/MiLO83/NeuralPass
@@ -247,9 +245,10 @@ uses `NeuralPassBridge` below its current working directory. NeuralPass has no
 built-in game path or 3DMark dependency.
 
 After starting that external bridge, opt in via **Add-ons > NeuralPass >
-Prompt-driven StreamDiffusion**, edit the prompt, and click **Apply prompt**. It
-is disabled by default so the packaged ONNX/preview backend works immediately
-without waiting for an unbundled process. The
+Prompt-driven SD-Turbo**, edit the prompt, and click **Apply prompt**. The choice
+is stored per game as `NeuralPassBridge/stream.enable`; disabling it removes that
+marker. It is disabled by default on a new game so the packaged ONNX/preview backend
+works immediately without waiting for an unbundled process. The
 bridge deliberately permits only one generated frame in flight, so latency is
 bounded and stale camera views do not form a queue.
 Changing or enabling a stream prompt invalidates queued output and the current
@@ -329,7 +328,7 @@ unsupported and reports the current counts in the overlay. A camera cut passes
 no previous surface to the classifier, so the new view becomes direct
 first-observation evidence while the reveal-only atlas planner still schedules
 its uncovered UVs. First-observation styling and later reveal inpainting use
-disjoint commit-validated masks; newly visible work receives tile priority so a
+disjoint commit-validated masks; newly visible samples receive atlas priority so a
 small reveal is not starved by a larger initial screen restyle. Missing capture
 frames break the comparison chain rather than reprojecting across an unknown gap.
 
@@ -427,18 +426,19 @@ backend without starting the game.
   to invalidate on every detected cut instead.
 - Generic automatic HUD recognition is not yet reliable. A normalized manual
   exclusion rectangle is available in the shader UI.
-- ONNX tile inference currently uses CPU tensor upload/readback around the
+- ONNX full-frame inference currently uses CPU tensor upload/readback around the
   DirectML session. It is asynchronous, but zero-copy GPU tensors remain future work.
-- Fixed style-transfer networks are spatially local and may show seams. Halos
-  and validity feathering reduce them but do not eliminate every model artifact.
+- Fixed style-transfer networks are lower-fidelity compatibility fallbacks. Their
+  fixed input resolution can soften detail, but the output remains one coherent
+  fullscreen composition without tile seams.
 - Cache deletion is intentionally permanent and path-guarded. Export or copy the
   `NeuralPassCache` directory first if you may want to restore learned atlases.
 
 ## Design notes
 
-`neuralpass_core` owns all policy: history validation, maximum age, mask
-dilation, tile priority, and padded jobs. The add-on owns capture and lifetime;
-inference backends only transform an input tile. That separation permits a
+`neuralpass_core` owns history, visibility, scene identity, and material-atlas
+policy. The add-on owns capture and lifetime; inference backends transform one
+coherent frame. That separation permits a
 future UVW/object-ID cache or WinML backend without changing the scheduler.
 
 The `DownToEarth` TinyUNet work informed the bounded residual `photo-detail`
