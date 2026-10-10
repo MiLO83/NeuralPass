@@ -96,6 +96,17 @@ uses an x86 evidence client with the packaged x64 worker. DirectML is the defaul
 pass `-Provider cpu` to isolate transport and recovery from GPU-provider health.
 Its report follows the same pre-install and installed evidence-location rule.
 
+After guided installation, `Manage NeuralPass Models.cmd` lists the four pinned
+style models and their local integrity state. Use, for example,
+`Manage NeuralPass Models.cmd -Action Install -Model mosaic` to download a model,
+or `-Action Verify -Model mosaic` to verify it. Downloads come only from the
+package's checksummed manifest, are accepted only after their pinned SHA-256
+matches, and are atomically placed into `models/downloads`. `-Repair` is required
+to replace a corrupt file. Installed and removed models update the installer's
+ownership manifest so diagnostics and uninstall remain accurate. The manager
+refuses to mutate an uninstalled, checksummed package and refuses to remove the
+last verified model.
+
 ## Troubleshooting order
 
 1. Confirm the game uses a packaged architecture and supported graphics API, and is running

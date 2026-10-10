@@ -153,6 +153,12 @@ JSON evidence report. Pass a DXGI device index when testing a non-default adapte
 Both DirectML packages include `Validate NeuralPass Worker.cmd`; it exercises the
 packaged client/worker transport, generation rollover, and forced worker restart.
 It defaults to DirectML and accepts `-Provider cpu` for transport-only validation.
+After guided installation, `Manage NeuralPass Models.cmd` lists, verifies, installs,
+repairs, and removes the four manifest-pinned style models. For example,
+`Manage NeuralPass Models.cmd -Action Install -Model mosaic` downloads Mosaic and
+accepts it only after its pinned SHA-256 matches. The manager updates the install
+ownership manifest, refuses to mutate the checksummed package, and will not remove
+the last verified model.
 See [`docs/compatibility.md`](docs/compatibility.md) for the API support matrix,
 safety policy, diagnostics, and troubleshooting sequence.
 

@@ -168,7 +168,8 @@ def main() -> int:
                    "runtime/DirectML.dll", "runtime/NeuralPassWorker.exe",
                    "runtime/NeuralPassHardwareTest.exe", "Validate NeuralPass Hardware.cmd",
                    "Validate-NeuralPassHardware.ps1", "runtime/NeuralPassWorkerHealthTest.exe",
-                   "Validate NeuralPass Worker.cmd", "Validate-NeuralPassWorker.ps1"}
+                   "Validate NeuralPass Worker.cmd", "Validate-NeuralPassWorker.ps1",
+                   "Manage NeuralPass Models.cmd", "Manage-NeuralPassModels.ps1"}
         absent = sorted(name for name in runtime if not (root / name).is_file())
         if absent:
             raise SystemExit("DirectML package is missing: " + ", ".join(absent))

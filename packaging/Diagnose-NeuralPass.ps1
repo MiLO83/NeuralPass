@@ -100,6 +100,24 @@ if (Test-Path -LiteralPath $installManifestPath -PathType Leaf) {
     } catch { Add-Line "! unreadable install manifest: $($_.Exception.Message)" }
 } else { Add-Line '- not installed through the guided installer' }
 Add-Line ''
+Add-Line 'Managed models:'
+$modelManifestPath = Join-Path $target 'models/manifest.json'
+if (Test-Path -LiteralPath $modelManifestPath -PathType Leaf) {
+    try {
+        $modelManifest = Get-Content -LiteralPath $modelManifestPath -Raw | ConvertFrom-Json
+        foreach ($model in $modelManifest.models) {
+            $modelPath = Join-Path $target ("models/downloads/" + [string]$model.filename)
+            if (-not (Test-Path -LiteralPath $modelPath -PathType Leaf)) {
+                Add-Line "- $($model.id): missing"
+                continue
+            }
+            $modelHash = (Get-FileHash -LiteralPath $modelPath -Algorithm SHA256).Hash
+            $modelState = if ($modelHash -ieq [string]$model.sha256) { 'verified' } else { 'CORRUPT' }
+            Add-Line "- $($model.id): $modelState; $((Get-Item -LiteralPath $modelPath).Length) bytes"
+        }
+    } catch { Add-Line "! unreadable model manifest: $($_.Exception.Message)" }
+} else { Add-Line '- model manifest not installed' }
+Add-Line ''
 Add-Line 'Latest hardware/provider evidence:'
 $hardwareReport = Get-ChildItem -LiteralPath $target -Filter 'NeuralPass-hardware-*.json' -File |
     Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1

@@ -183,6 +183,8 @@ if /I "%NP_MODE%"=="directml" (
     copy /Y "%NP_ROOT%\packaging\Validate-NeuralPassWorker.ps1" "%NP_DIST%\Validate-NeuralPassWorker.ps1" >nul
     copy /Y "%NP_ROOT%\packaging\Validate NeuralPass Hardware.cmd" "%NP_DIST%\Validate NeuralPass Hardware.cmd" >nul
     copy /Y "%NP_ROOT%\packaging\Validate-NeuralPassHardware.ps1" "%NP_DIST%\Validate-NeuralPassHardware.ps1" >nul
+    copy /Y "%NP_ROOT%\packaging\Manage NeuralPass Models.cmd" "%NP_DIST%\Manage NeuralPass Models.cmd" >nul
+    copy /Y "%NP_ROOT%\packaging\Manage-NeuralPassModels.ps1" "%NP_DIST%\Manage-NeuralPassModels.ps1" >nul
     if not exist "%NP_DIST%\models\downloads" mkdir "%NP_DIST%\models\downloads"
     copy /Y "%NP_ROOT%\models\downloads\*.onnx" "%NP_DIST%\models\downloads\" >nul
     copy /Y "%NP_ROOT%\models\manifest.json" "%NP_DIST%\models\manifest.json" >nul

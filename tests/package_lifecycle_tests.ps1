@@ -25,6 +25,27 @@ try {
         throw 'worker executable was not isolated from game-root graphics proxies'
     }
 
+    $modelManager = Join-Path $game 'Manage-NeuralPassModels.ps1'
+    & $modelManager -Action Verify -Model candy
+    $lastModelRefused = $false
+    try {
+        & $modelManager -Action Remove -Model candy
+    } catch {
+        $lastModelRefused = $_.Exception.Message -match 'last verified model'
+    }
+    if (-not $lastModelRefused) {
+        throw 'model manager did not protect the last verified model'
+    }
+    $immutableRefused = $false
+    try {
+        & (Join-Path $packageRoot 'Manage-NeuralPassModels.ps1') -Action Install -Model mosaic
+    } catch {
+        $immutableRefused = $_.Exception.Message -match 'assembled package is immutable'
+    }
+    if (-not $immutableRefused) {
+        throw 'model manager did not protect the assembled package from mutation'
+    }
+
     $vulkanValidator = Join-Path $game 'Validate-NeuralPassVulkan.ps1'
     $vulkanProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$vulkanValidator`"") `
@@ -68,6 +89,7 @@ try {
     $diagnostics = Get-Content -LiteralPath (Join-Path $game 'NeuralPass-diagnostics.txt') -Raw
     if ($diagnostics -notmatch 'Package provenance:' -or
         $diagnostics -notmatch 'Installed file integrity:[\s\S]*PASS:' -or
+        $diagnostics -notmatch 'Managed models:[\s\S]*candy: verified' -or
         $diagnostics -notmatch 'Vulkan runtime: passed' -or
         $diagnostics -notmatch 'Worker health: passed True') {
         throw 'diagnostics did not verify package provenance and installed files'
