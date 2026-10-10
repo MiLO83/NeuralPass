@@ -1349,6 +1349,7 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::atomic_uint64_t submitted = 0;
     std::atomic_uint64_t completed = 0;
     std::atomic_uint64_t dropped = 0;
+    std::atomic_uint64_t effect_frames = 0;
     std::array<std::atomic_uint64_t, 6> visibility_counts {};
     std::atomic_uint32_t tile_budget = 2;
     std::atomic_uint32_t effective_tile_budget = 1;
@@ -1417,6 +1418,7 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::uint32_t evidence_width = 0;
     std::uint32_t evidence_height = 0;
     bool evidence_supported = false;
+    std::uint64_t evidence_effect_frames = 0;
 };
 
 std::filesystem::path bridge_directory() {
@@ -2494,12 +2496,14 @@ void write_runtime_evidence(RuntimeState &state, reshade::api::device_api api,
                             reshade::api::color_space color_space,
                             const std::optional<CaptureColorContract> &contract) {
     const bool supported = contract.has_value();
+    const auto effect_frames = state.effect_frames.load();
     if (state.runtime_evidence_written && state.evidence_api == api &&
         state.evidence_format == source_desc.texture.format &&
         state.evidence_color_space == color_space &&
         state.evidence_width == source_desc.texture.width &&
         state.evidence_height == source_desc.texture.height &&
-        state.evidence_supported == supported)
+        state.evidence_supported == supported &&
+        effect_frames - state.evidence_effect_frames < 120)
         return;
 
     std::lock_guard evidence_lock(g_runtime_evidence_mutex);
@@ -2540,6 +2544,15 @@ void write_runtime_evidence(RuntimeState &state, reshade::api::device_api api,
                     contract->encoding != neuralpass::DisplayEncoding::sdr_srgb,
                 .classification = supported ? "compatible_format_color_space"
                     : "unsupported_or_mismatched_format_color_space",
+                .effect_frames = effect_frames,
+                .draws_seen = g_draws_seen.load(),
+                .uv_draws_seen = g_uv_draws_seen.load(),
+                .material_draws_seen = g_material_draws_seen.load(),
+                .surface_frames_captured = g_surface_frames_captured.load(),
+                .surface_pixels_captured = g_surface_pixels_captured.load(),
+                .inference_submitted = state.submitted.load(),
+                .inference_completed = state.completed.load(),
+                .inference_dropped = state.dropped.load(),
             });
             output.flush();
             serialized = output.good();
@@ -2562,6 +2575,7 @@ void write_runtime_evidence(RuntimeState &state, reshade::api::device_api api,
         state.evidence_width = source_desc.texture.width;
         state.evidence_height = source_desc.texture.height;
         state.evidence_supported = supported;
+        state.evidence_effect_frames = effect_frames;
     }
 }
 
@@ -2888,6 +2902,7 @@ void on_begin_effects(reshade::api::effect_runtime *runtime, reshade::api::comma
                       reshade::api::resource_view rtv, reshade::api::resource_view) {
     auto *state = runtime->get_private_data<RuntimeState>();
     if (!state) return;
+    ++state->effect_frames;
     const auto effect_time = std::chrono::steady_clock::now();
     if (state->last_effect_time.time_since_epoch().count() != 0) {
         const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(

@@ -39,7 +39,7 @@ const char *boolean(bool value) { return value ? "true" : "false"; }
 std::string runtime_display_evidence_json(const RuntimeDisplayEvidence &value) {
     std::ostringstream output;
     output << "{\n"
-           << "  \"schema_version\": 1,\n"
+           << "  \"schema_version\": 2,\n"
            << "  \"generated_utc\": " << quoted(value.generated_utc) << ",\n"
            << "  \"process_architecture\": " << quoted(value.process_architecture) << ",\n"
            << "  \"graphics_api\": " << quoted(value.graphics_api) << ",\n"
@@ -54,7 +54,16 @@ std::string runtime_display_evidence_json(const RuntimeDisplayEvidence &value) {
            << boolean(value.display_capture_supported) << ",\n"
            << "  \"display_encoding\": " << quoted(value.display_encoding) << ",\n"
            << "  \"hdr_path\": " << boolean(value.hdr_path) << ",\n"
-           << "  \"classification\": " << quoted(value.classification) << "\n"
+           << "  \"classification\": " << quoted(value.classification) << ",\n"
+           << "  \"effect_frames\": " << value.effect_frames << ",\n"
+           << "  \"draws_seen\": " << value.draws_seen << ",\n"
+           << "  \"uv_draws_seen\": " << value.uv_draws_seen << ",\n"
+           << "  \"material_draws_seen\": " << value.material_draws_seen << ",\n"
+           << "  \"surface_frames_captured\": " << value.surface_frames_captured << ",\n"
+           << "  \"surface_pixels_captured\": " << value.surface_pixels_captured << ",\n"
+           << "  \"inference_submitted\": " << value.inference_submitted << ",\n"
+           << "  \"inference_completed\": " << value.inference_completed << ",\n"
+           << "  \"inference_dropped\": " << value.inference_dropped << "\n"
            << "}\n";
     return output.str();
 }

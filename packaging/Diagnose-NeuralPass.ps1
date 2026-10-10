@@ -127,7 +127,7 @@ if (Test-Path -LiteralPath $runtimeEvidencePath -PathType Leaf) {
     try {
         $runtimeEvidence = Get-Content -LiteralPath $runtimeEvidencePath -Raw |
             ConvertFrom-Json
-        if ($runtimeEvidence.schema_version -ne 1 -or
+        if ($runtimeEvidence.schema_version -notin @(1, 2) -or
             [string]::IsNullOrWhiteSpace([string]$runtimeEvidence.graphics_api) -or
             [string]::IsNullOrWhiteSpace([string]$runtimeEvidence.backbuffer_format) -or
             [string]::IsNullOrWhiteSpace([string]$runtimeEvidence.swapchain_color_space)) {
@@ -138,6 +138,10 @@ if (Test-Path -LiteralPath $runtimeEvidencePath -PathType Leaf) {
         Add-Line "- backbuffer $($runtimeEvidence.backbuffer_format); swapchain color space $($runtimeEvidence.swapchain_color_space)"
         Add-Line "- display capture supported $($runtimeEvidence.display_capture_supported); encoding $($runtimeEvidence.display_encoding); HDR path $($runtimeEvidence.hdr_path)"
         Add-Line "- classification $($runtimeEvidence.classification)"
+        if ($runtimeEvidence.schema_version -ge 2) {
+            Add-Line "- live counters: effects $($runtimeEvidence.effect_frames); draws $($runtimeEvidence.draws_seen); UV draws $($runtimeEvidence.uv_draws_seen); material draws $($runtimeEvidence.material_draws_seen)"
+            Add-Line "- capture: frames $($runtimeEvidence.surface_frames_captured); supported pixels $($runtimeEvidence.surface_pixels_captured); inference submitted/completed/dropped $($runtimeEvidence.inference_submitted)/$($runtimeEvidence.inference_completed)/$($runtimeEvidence.inference_dropped)"
+        }
     } catch { Add-Line "! unreadable runtime evidence: $($_.Exception.Message)" }
 } else {
     Add-Line '- no live report; launch the game through ReShade to observe API and HDR state'

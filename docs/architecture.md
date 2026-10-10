@@ -162,10 +162,13 @@ display/game validation is still required before promotion from experimental.
 At the live effect boundary, the add-on serializes the observed graphics API,
 process architecture, backbuffer dimensions/format, declared swapchain color
 space, selected display encoding, and supported/bypassed classification to a
-schema-v1 JSON report. The serializer is shared, deterministic, and exact-output
-tested; the Windows publisher replaces the report atomically only after a complete
-write. This evidence establishes which path executed, not the visual quality or
-calibration of an HDR display.
+schema-v2 JSON report. The report is refreshed every 120 effect frames and adds
+effect, draw, UV/material, surface-capture, and inference counters. This is a
+game-independent liveness record: validators can prove that the generic adapter
+advanced without relying on an executable name or a benchmark-specific hook. The
+serializer is shared, deterministic, and exact-output tested; the Windows publisher
+replaces the report atomically only after a complete write. This evidence establishes
+which path executed, not the visual quality or calibration of an HDR display.
 
 ## Graphics API portability
 

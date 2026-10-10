@@ -85,7 +85,10 @@ user tokens, registry dumps, process lists, and arbitrary files.
 
 `NeuralPass-runtime-evidence.json` is refreshed atomically whenever the loaded
 ReShade runtime observes a changed API, backbuffer size/format, swapchain color
-space, or supported/bypassed classification. A supported HDR entry therefore proves
+space, or supported/bypassed classification, and periodically while effects are
+running. Schema 2 adds monotonically advancing effect, draw, UV/material, surface
+capture, and inference counters so a report can distinguish a merely initialized
+swapchain from an active NeuralPass workload in any game. A supported HDR entry therefore proves
 that NeuralPass saw FP16 with declared scRGB or RGB10A2 with declared HDR10/PQ in
 that game session. It does not prove visual quality, display calibration, or a soak
 test; those remain hardware/game acceptance gates.

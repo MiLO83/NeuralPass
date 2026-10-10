@@ -165,7 +165,7 @@ try {
     # proxy-name guesses. The add-on writer itself is compiled in both architectures;
     # this fixture verifies the packaged consumer and schema contract.
     [ordered]@{
-        schema_version = 1
+        schema_version = 2
         generated_utc = '2026-01-02T03:04:05.006Z'
         process_architecture = $expectedClientArchitecture
         graphics_api = 'd3d12'
@@ -180,6 +180,15 @@ try {
         display_encoding = 'hdr10_pq'
         hdr_path = $true
         classification = 'compatible_format_color_space'
+        effect_frames = 900
+        draws_seen = 800
+        uv_draws_seen = 700
+        material_draws_seen = 600
+        surface_frames_captured = 500
+        surface_pixels_captured = 400
+        inference_submitted = 300
+        inference_completed = 200
+        inference_dropped = 100
     } | ConvertTo-Json | Set-Content -LiteralPath (
         Join-Path $game 'NeuralPass-runtime-evidence.json') -Encoding UTF8
 
@@ -190,6 +199,8 @@ try {
         $diagnostics -notmatch 'Managed models:[\s\S]*candy: verified' -or
         $diagnostics -notmatch 'Authoritative live runtime evidence:[\s\S]*API d3d12' -or
         $diagnostics -notmatch 'encoding hdr10_pq; HDR path True' -or
+        $diagnostics -notmatch 'live counters: effects 900; draws 800; UV draws 700; material draws 600' -or
+        $diagnostics -notmatch 'capture: frames 500; supported pixels 400; inference submitted/completed/dropped 300/200/100' -or
         $diagnostics -notmatch 'Vulkan runtime: passed' -or
         $diagnostics -notmatch 'Worker health: passed True') {
         throw 'diagnostics did not verify package provenance and installed files'

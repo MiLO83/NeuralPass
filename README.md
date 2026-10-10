@@ -188,8 +188,9 @@ Once the add-on reaches ReShade's effects pass, it atomically writes
 `NeuralPass-runtime-evidence.json` beside the game. This records the actual graphics
 API, process architecture, backbuffer dimensions and format, declared swapchain color
 space, and whether the exact format/color-space pair selected SDR, scRGB, HDR10/PQ,
-or a safe bypass. Diagnostics consumes this structured report; proxy DLL names remain
-only pre-launch candidates, not proof of the live API or HDR path.
+or a safe bypass. It refreshes every 120 effect frames with generic draw, UV/material,
+surface-capture, and inference counters. Diagnostics consumes this structured report;
+proxy DLL names remain only pre-launch candidates, not proof of a live adapter path.
 
 ## Prompt-driven live restyling
 
@@ -225,8 +226,14 @@ managed-worker experience:
 
 ```sh
 cd /home/topnotch/github/MiLO83/NeuralPass
-external/stream-venv/bin/python tools/stream_bridge.py
+external/stream-venv/bin/python tools/stream_bridge.py \
+  --bridge /mnt/d/path/to/your/game/NeuralPassBridge
 ```
+
+The bridge location is per game. It may instead be supplied through the
+`NEURALPASS_BRIDGE` environment variable; when neither is supplied, the helper
+uses `NeuralPassBridge` below its current working directory. NeuralPass has no
+built-in game path or 3DMark dependency.
 
 After starting that external bridge, opt in via **Add-ons > NeuralPass >
 Prompt-driven StreamDiffusion**, edit the prompt, and click **Apply prompt**. It

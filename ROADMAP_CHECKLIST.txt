@@ -278,8 +278,11 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     forces x64 worker restart, and requires diagnostics to consume the resulting
     health report. The loaded add-on atomically emits structured live API,
     architecture, backbuffer format/dimensions, swapchain color space, HDR encoding,
-    and supported/bypassed classification; packaged diagnostics validates and consumes
-    that schema. Actual HDR visual quality and monitor/game soak remain acceptance gates.
+    supported/bypassed classification, and periodically refreshed effect/draw/UV/material,
+    surface-capture, and inference counters; packaged diagnostics validates and consumes
+    both the legacy and current schemas. The reporting path is executable-agnostic and
+    contains no benchmark/game-specific routing. Actual HDR visual quality and
+    monitor/game soak remain acceptance gates.
 [x] Require explicit per-game activation.
     Evidence: the guided installer copies nothing until the user selects a game and
     types the exact activation phrase; isolated install/uninstall lifecycle passes.

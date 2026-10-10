@@ -21,9 +21,18 @@ struct RuntimeDisplayEvidence {
     std::string_view display_encoding;
     bool hdr_path = false;
     std::string_view classification;
+    std::uint64_t effect_frames = 0;
+    std::uint64_t draws_seen = 0;
+    std::uint64_t uv_draws_seen = 0;
+    std::uint64_t material_draws_seen = 0;
+    std::uint64_t surface_frames_captured = 0;
+    std::uint64_t surface_pixels_captured = 0;
+    std::uint64_t inference_submitted = 0;
+    std::uint64_t inference_completed = 0;
+    std::uint64_t inference_dropped = 0;
 };
 
-// Deterministic schema-v1 JSON used by the loaded add-on and packaged
+// Deterministic schema-v2 JSON used by the loaded add-on and packaged
 // diagnostics. The terminating newline makes interrupted/manual inspection
 // unambiguous; publication itself is an atomic platform operation.
 [[nodiscard]] std::string runtime_display_evidence_json(

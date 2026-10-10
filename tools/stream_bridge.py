@@ -27,16 +27,27 @@ DEFAULT_PROMPT = (
     "red velvet, green enamel, brass toy machinery, candy-cane accents, snow, frost, warm golden "
     "fairy lights, cinematic realistic video game graphics, preserve silhouettes and composition"
 )
-DEFAULT_BRIDGE = Path(
-    "/mnt/d/SteamLibrary/steamapps/common/3DMark Demo/dlc/steel-nomad-test/windows/bin/x64/"
-    "NeuralPassBridge"
-)
+
+
+def default_bridge() -> Path:
+    configured = os.environ.get("NEURALPASS_BRIDGE")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.cwd() / "NeuralPassBridge"
 
 
 def parse_args() -> argparse.Namespace:
     project = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bridge", type=Path, default=DEFAULT_BRIDGE)
+    parser.add_argument(
+        "--bridge",
+        type=Path,
+        default=default_bridge(),
+        help=(
+            "game-local NeuralPassBridge directory (default: $NEURALPASS_BRIDGE, "
+            "then ./NeuralPassBridge)"
+        ),
+    )
     parser.add_argument("--model", type=Path, default=project / "models/downloads/sd-turbo")
     parser.add_argument("--vae", type=Path, default=project / "models/downloads/taesd")
     parser.add_argument(

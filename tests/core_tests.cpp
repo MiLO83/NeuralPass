@@ -292,10 +292,19 @@ static void test_runtime_display_evidence_json_is_exact_and_escaped() {
         .display_encoding = "hdr10_pq",
         .hdr_path = true,
         .classification = "compatible_format_color_space",
+        .effect_frames = 900,
+        .draws_seen = 800,
+        .uv_draws_seen = 700,
+        .material_draws_seen = 600,
+        .surface_frames_captured = 500,
+        .surface_pixels_captured = 400,
+        .inference_submitted = 300,
+        .inference_completed = 200,
+        .inference_dropped = 100,
     });
     const std::string expected =
         "{\n"
-        "  \"schema_version\": 1,\n"
+        "  \"schema_version\": 2,\n"
         "  \"generated_utc\": \"2026-01-02T03:04:05.006Z\",\n"
         "  \"process_architecture\": \"X64\",\n"
         "  \"graphics_api\": \"d3d12\\\"probe\",\n"
@@ -309,7 +318,16 @@ static void test_runtime_display_evidence_json_is_exact_and_escaped() {
         "  \"display_capture_supported\": true,\n"
         "  \"display_encoding\": \"hdr10_pq\",\n"
         "  \"hdr_path\": true,\n"
-        "  \"classification\": \"compatible_format_color_space\"\n"
+        "  \"classification\": \"compatible_format_color_space\",\n"
+        "  \"effect_frames\": 900,\n"
+        "  \"draws_seen\": 800,\n"
+        "  \"uv_draws_seen\": 700,\n"
+        "  \"material_draws_seen\": 600,\n"
+        "  \"surface_frames_captured\": 500,\n"
+        "  \"surface_pixels_captured\": 400,\n"
+        "  \"inference_submitted\": 300,\n"
+        "  \"inference_completed\": 200,\n"
+        "  \"inference_dropped\": 100\n"
         "}\n";
     require(json == expected, "runtime display evidence JSON contract changed");
 }
