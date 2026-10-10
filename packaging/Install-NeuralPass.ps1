@@ -1,5 +1,8 @@
 [CmdletBinding()]
-param([Parameter(Position = 0)][string]$TargetPath)
+param(
+    [Parameter(Position = 0)][string]$TargetPath,
+    [string]$ActivationPhrase
+)
 
 $ErrorActionPreference = 'Stop'
 $package = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -9,6 +12,47 @@ $addonName = switch ($packageMetadata.architecture) {
     'windows-x86' { 'NeuralPass.addon32' }
     default { throw "Unsupported package architecture: $($packageMetadata.architecture)" }
 }
+
+function Test-PackageIntegrity {
+    $checksumPath = Join-Path $package 'SHA256SUMS.txt'
+    if (-not (Test-Path -LiteralPath $checksumPath -PathType Leaf)) {
+        throw 'SHA256SUMS.txt is missing; refusing an unverifiable package.'
+    }
+    $expected = [Collections.Generic.Dictionary[string,string]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    foreach ($line in Get-Content -LiteralPath $checksumPath) {
+        if ($line -notmatch '^([0-9a-fA-F]{64}) \*(.+)$') {
+            throw "Invalid checksum manifest line: $line"
+        }
+        $relative = $Matches[2].Replace('/', [IO.Path]::DirectorySeparatorChar)
+        $candidate = [IO.Path]::GetFullPath((Join-Path $package $relative))
+        $prefix = $package.TrimEnd([IO.Path]::DirectorySeparatorChar,
+            [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+        if (-not $candidate.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -or
+            $expected.ContainsKey($relative)) {
+            throw "Unsafe or duplicate checksum path: $relative"
+        }
+        $expected.Add($relative, $Matches[1].ToUpperInvariant())
+    }
+    $actual = @(Get-ChildItem -LiteralPath $package -File -Recurse | Where-Object {
+        $_.FullName -ne $checksumPath
+    })
+    if ($actual.Count -ne $expected.Count) {
+        throw 'Package file count does not match SHA256SUMS.txt.'
+    }
+    foreach ($item in $actual) {
+        $relative = $item.FullName.Substring($package.Length + 1)
+        if (-not $expected.ContainsKey($relative)) {
+            throw "Package file is absent from SHA256SUMS.txt: $relative"
+        }
+        $actualHash = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash
+        if ($actualHash -cne $expected[$relative]) {
+            throw "Package checksum mismatch: $relative"
+        }
+    }
+}
+
+Test-PackageIntegrity
 
 function Resolve-GameDirectory([string]$Value) {
     if ([string]::IsNullOrWhiteSpace($Value)) {
@@ -44,7 +88,10 @@ Write-Host ''
 Write-Host 'NeuralPass is an unsigned research preview.' -ForegroundColor Yellow
 Write-Host 'Use it only with an offline game. Do not use it with protected multiplayer software.'
 Write-Host "Target: $target"
-if ((Read-Host 'Type INSTALL to activate NeuralPass for this game') -cne 'INSTALL') {
+$confirmation = if ([string]::IsNullOrWhiteSpace($ActivationPhrase)) {
+    Read-Host 'Type INSTALL to activate NeuralPass for this game'
+} else { $ActivationPhrase }
+if ($confirmation -cne 'INSTALL') {
     throw 'Installation cancelled.'
 }
 
@@ -108,6 +155,7 @@ foreach ($entry in $entries) {
 }
 
 $installed = @()
+$installedHashes = [ordered]@{}
 foreach ($entry in $entries) {
     $source = Join-Path $package $entry.Source
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { continue }
@@ -115,12 +163,16 @@ foreach ($entry in $entries) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
     Copy-Item -LiteralPath $source -Destination $destination -Force
     $installed += $entry.Destination
+    $installedHashes[$entry.Destination] =
+        (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
 }
 $manifest = [ordered]@{
     format = 1
     installed_utc = [DateTime]::UtcNow.ToString('o')
     package = (Get-Content -LiteralPath (Join-Path $package 'PACKAGE.json') -Raw | ConvertFrom-Json)
+    package_manifest_sha256 = (Get-FileHash -LiteralPath (Join-Path $package 'SHA256SUMS.txt') -Algorithm SHA256).Hash
     files = $installed
+    file_hashes = $installedHashes
 }
 $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 

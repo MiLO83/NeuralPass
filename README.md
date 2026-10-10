@@ -115,9 +115,11 @@ then extract it to a separate directory.
 
 For an assembled Windows package, run `Install NeuralPass.cmd` and give it the
 game executable or directory. It refuses known anti-cheat markers, checks for a
-graphics proxy, displays the unsigned-preview warning, and requires you to type
-`INSTALL` before copying anything. The package also includes manifest-scoped
-uninstallation and a diagnostics report generator.
+graphics proxy, verifies every packaged file against `SHA256SUMS.txt`, displays the
+unsigned-preview warning, and requires you to type `INSTALL` before copying anything.
+The package also includes hash-aware manifest-scoped uninstallation and a diagnostics
+report generator. Uninstall refuses to delete modified files unless you explicitly
+pass `-ForceModified` to the PowerShell script.
 
 For a manual installation:
 

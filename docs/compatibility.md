@@ -48,7 +48,9 @@ policy prohibits injection, graphics modifications, unsigned add-ons, or automat
 
 `Uninstall NeuralPass.cmd` reads `NeuralPass.install.json` and removes only the
 files recorded by installation. Pass `-RemoveCache` to its PowerShell script if
-you also want the local NeuralPass cache removed. Package documentation and
+you also want the local NeuralPass cache removed. It preserves modified installed
+files by default; inspect them and pass `-ForceModified` only when deletion is
+intentional. Package documentation and
 notices are installed below the game's `NeuralPass` directory so generic game
 files such as `README.md` and `LICENSE.txt` are never overwritten. Installation
 also stops before copying if an unowned destination file would be replaced.
@@ -61,6 +63,9 @@ Run `Diagnose NeuralPass.cmd` beside the game executable. It creates
 - Windows, process architecture, display adapter, and driver information;
 - detected graphics proxy/runtime files with sizes and SHA-256 hashes;
 - package provenance, SPDX SBOM, checksums, and installation-manifest presence;
+- installed-file integrity against hashes captured during installation;
+- proxy-derived API candidates and runtime API/HDR evidence from `ReShade.log`;
+- the latest packaged DirectML hardware/provider result, when available;
 - known safety markers at the game root; and
 - the last 120 lines of `ReShade.log` when available.
 

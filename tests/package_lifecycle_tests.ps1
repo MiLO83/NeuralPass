@@ -1,0 +1,56 @@
+[CmdletBinding()]
+param([Parameter(Mandatory = $true)][string]$Package)
+
+$ErrorActionPreference = 'Stop'
+$packageRoot = (Get-Item -LiteralPath $Package).FullName
+$testRoot = Join-Path ([IO.Path]::GetTempPath()) ("NeuralPass-lifecycle-" + [Guid]::NewGuid())
+$game = Join-Path $testRoot 'game'
+try {
+    New-Item -ItemType Directory -Path $game | Out-Null
+    Set-Content -LiteralPath (Join-Path $game 'dxgi.dll') -Value 'test proxy marker'
+
+    & (Join-Path $packageRoot 'Install-NeuralPass.ps1') `
+        -TargetPath $game -ActivationPhrase 'INSTALL'
+    $installManifestPath = Join-Path $game 'NeuralPass.install.json'
+    if (-not (Test-Path -LiteralPath $installManifestPath -PathType Leaf)) {
+        throw 'installer did not create its ownership manifest'
+    }
+    $manifest = Get-Content -LiteralPath $installManifestPath -Raw | ConvertFrom-Json
+    if (-not $manifest.file_hashes -or $manifest.files.Count -lt 10) {
+        throw 'install manifest does not contain per-file integrity evidence'
+    }
+
+    & (Join-Path $packageRoot 'Diagnose-NeuralPass.ps1') -TargetPath $game
+    $diagnostics = Get-Content -LiteralPath (Join-Path $game 'NeuralPass-diagnostics.txt') -Raw
+    if ($diagnostics -notmatch 'Package provenance:' -or
+        $diagnostics -notmatch 'Installed file integrity:[\s\S]*PASS:') {
+        throw 'diagnostics did not verify package provenance and installed files'
+    }
+
+    $tampered = Join-Path $game 'NeuralPass/README.md'
+    Add-Content -LiteralPath $tampered -Value 'tamper test'
+    $refused = $false
+    try {
+        & (Join-Path $packageRoot 'Uninstall-NeuralPass.ps1') `
+            -TargetPath $game -Confirmation 'REMOVE'
+    } catch {
+        $refused = $_.Exception.Message -match 'modified; refusing to delete'
+    }
+    if (-not $refused -or -not (Test-Path -LiteralPath $installManifestPath)) {
+        throw 'uninstaller did not safely refuse a modified installed file'
+    }
+
+    & (Join-Path $packageRoot 'Uninstall-NeuralPass.ps1') `
+        -TargetPath $game -Confirmation 'REMOVE' -ForceModified
+    if ((Test-Path -LiteralPath $installManifestPath) -or
+        (Test-Path -LiteralPath (Join-Path $game 'NeuralPass.addon64')) -or
+        (Test-Path -LiteralPath (Join-Path $game 'NeuralPass.addon32'))) {
+        throw 'uninstaller left manifest-owned runtime files behind'
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $game 'dxgi.dll'))) {
+        throw 'uninstaller removed an unowned game file'
+    }
+    Write-Host 'Package install/diagnose/tamper/uninstall lifecycle passed.'
+} finally {
+    Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
+}

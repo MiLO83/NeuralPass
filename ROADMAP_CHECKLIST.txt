@@ -204,12 +204,14 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 ---------------------------------------
 [~] Build x86/x64 installer, updater, diagnostics, model manager, and uninstaller.
     Evidence: architecture-aware manifest-scoped x64 and worker-backed x86 packages, installer,
-    uninstaller, and diagnostics are built and checksum-validated; the Win32 add-on
-    and D3D9/10/11/12 suites pass. Updater and model-manager work remains.
+    tamper-safe uninstaller, and integrity diagnostics pass an isolated lifecycle
+    test; the Win32 add-on and D3D9/10/11/12 suites pass. Updater and model-manager
+    work remains.
 [~] Detect target API, ReShade support, GPU provider, HDR mode, and worker health.
-    Evidence: installer requires a graphics proxy and diagnostics report proxy files,
-    GPU/driver data, package hashes, safety markers, and ReShade logs; HDR and live
-    worker-health probes remain.
+    Evidence: installer requires a graphics proxy; diagnostics report proxy-derived
+    API candidates, GPU/driver data, package/install integrity, latest DirectML
+    provider evidence, safety markers, and API/HDR/add-on evidence from ReShade logs.
+    Authoritative live HDR and worker-health probes remain.
 [x] Require explicit per-game activation.
     Evidence: the guided installer copies nothing until the user selects a game and
     types the exact activation phrase; isolated install/uninstall lifecycle passes.

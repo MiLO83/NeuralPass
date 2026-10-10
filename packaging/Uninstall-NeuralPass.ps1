@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)][string]$TargetPath,
-    [switch]$RemoveCache
+    [switch]$RemoveCache,
+    [switch]$ForceModified,
+    [string]$Confirmation
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,17 +20,35 @@ if ($manifest.format -ne 1 -or -not $manifest.files) {
     throw 'The install manifest is invalid; no files were removed.'
 }
 Write-Host "Target: $target"
-if ((Read-Host 'Type REMOVE to uninstall the manifest-listed NeuralPass files') -cne 'REMOVE') {
+$answer = if ([string]::IsNullOrWhiteSpace($Confirmation)) {
+    Read-Host 'Type REMOVE to uninstall the manifest-listed NeuralPass files'
+} else { $Confirmation }
+if ($answer -cne 'REMOVE') {
     throw 'Uninstall cancelled.'
 }
 $targetPrefix = $target.TrimEnd([IO.Path]::DirectorySeparatorChar,
     [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+$resolved = @()
 foreach ($relative in $manifest.files) {
     $candidate = [IO.Path]::GetFullPath((Join-Path $target ([string]$relative)))
     if (-not $candidate.StartsWith($targetPrefix, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Unsafe manifest path: $relative"
     }
-    Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
+    $resolved += [pscustomobject]@{ Relative = [string]$relative; Path = $candidate }
+}
+if ($manifest.file_hashes -and -not $ForceModified) {
+    foreach ($entry in $resolved) {
+        $expected = $manifest.file_hashes.PSObject.Properties[$entry.Relative].Value
+        if ((Test-Path -LiteralPath $entry.Path -PathType Leaf) -and $expected) {
+            $actual = (Get-FileHash -LiteralPath $entry.Path -Algorithm SHA256).Hash
+            if ($actual -cne $expected) {
+                throw "Installed file was modified; refusing to delete it without -ForceModified: $($entry.Relative)"
+            }
+        }
+    }
+}
+foreach ($entry in $resolved) {
+    Remove-Item -LiteralPath $entry.Path -Force -ErrorAction SilentlyContinue
 }
 Remove-Item -LiteralPath $manifestPath -Force
 if ($RemoveCache) {

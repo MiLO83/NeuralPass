@@ -174,6 +174,8 @@ if /I "%NP_MODE%"=="directml" (
 if errorlevel 1 goto :failed
 %NP_PY% "%NP_ROOT%\tools\validate_package.py" "%NP_DIST%"
 if errorlevel 1 goto :failed
+powershell -NoProfile -ExecutionPolicy Bypass -File "%NP_ROOT%\tests\package_lifecycle_tests.ps1" -Package "%NP_DIST%"
+if errorlevel 1 goto :failed
 
 echo.
 echo ============================================================
