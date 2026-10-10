@@ -159,7 +159,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 -------------------------
 [~] Replace the WSL filesystem bridge with NeuralPassWorker.exe.
     Evidence: packaged fixed-model inference now has a native x64 worker used by the
-    Win32 add-on; prompt-driven diffusion still uses the opt-in legacy bridge.
+    Win32 add-on. Guided installs isolate the worker and private ONNX/DirectML copies
+    from game-root graphics proxy DLLs; prompt-driven diffusion still uses the opt-in
+    legacy bridge.
 [x] Add versioned named-pipe control and bounded shared-memory transport.
     Evidence: protocol-v1 control records and a private 8 MiB single-tile mailbox pass
     native x64 and x86-to-x64 ONNX integration tests plus portable bounds tests.

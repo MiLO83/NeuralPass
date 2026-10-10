@@ -164,16 +164,29 @@ def main() -> int:
     mode = metadata.get("mode")
     if mode == "directml":
         runtime = {"onnxruntime.dll", "onnxruntime_providers_shared.dll", "DirectML.dll",
-                   "NeuralPassWorker.exe",
-                   "NeuralPassHardwareTest.exe", "Validate NeuralPass Hardware.cmd",
-                   "Validate-NeuralPassHardware.ps1", "NeuralPassWorkerHealthTest.exe",
+                   "runtime/onnxruntime.dll", "runtime/onnxruntime_providers_shared.dll",
+                   "runtime/DirectML.dll", "runtime/NeuralPassWorker.exe",
+                   "runtime/NeuralPassHardwareTest.exe", "Validate NeuralPass Hardware.cmd",
+                   "Validate-NeuralPassHardware.ps1", "runtime/NeuralPassWorkerHealthTest.exe",
                    "Validate NeuralPass Worker.cmd", "Validate-NeuralPassWorker.ps1"}
         absent = sorted(name for name in runtime if not (root / name).is_file())
         if absent:
             raise SystemExit("DirectML package is missing: " + ", ".join(absent))
-        if pe_machine(root / "NeuralPassWorker.exe") != 0x8664:
+        unsafe_root_workers = sorted(
+            name for name in ("NeuralPassWorker.exe", "NeuralPassHardwareTest.exe",
+                              "NeuralPassWorkerHealthTest.exe")
+            if (root / name).exists()
+        )
+        if unsafe_root_workers:
+            raise SystemExit(
+                "worker executables must be isolated below runtime/: " +
+                ", ".join(unsafe_root_workers)
+            )
+        if pe_machine(root / "runtime" / "NeuralPassWorker.exe") != 0x8664:
             raise SystemExit("NeuralPassWorker.exe must be an x64 PE image")
-        if pe_machine(root / "NeuralPassWorkerHealthTest.exe") != expected_machine:
+        if pe_machine(root / "runtime" / "NeuralPassHardwareTest.exe") != 0x8664:
+            raise SystemExit("NeuralPassHardwareTest.exe must be an x64 PE image")
+        if pe_machine(root / "runtime" / "NeuralPassWorkerHealthTest.exe") != expected_machine:
             raise SystemExit("worker-health runner PE architecture does not match package")
         if not list((root / "models" / "downloads").glob("*.onnx")):
             raise SystemExit("DirectML package contains no ONNX model")

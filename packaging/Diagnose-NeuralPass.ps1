@@ -49,8 +49,11 @@ $names = @(
     'NeuralPass.addon64', 'NeuralPass.addon32', 'ReShade.ini', 'ReShade.log', 'dxgi.dll', 'd3d9.dll',
     'd3d10.dll', 'd3d11.dll', 'd3d12.dll', 'opengl32.dll', 'onnxruntime.dll',
     'onnxruntime_providers_shared.dll', 'DirectML.dll', 'NeuralPass.install.json',
-    'NeuralPassWorker.exe', 'NeuralPassHardwareTest.exe', 'NeuralPass-hardware-0.json',
-    'NeuralPassWorkerHealthTest.exe', 'NeuralPass-worker-health.json',
+    'NeuralPass/runtime/onnxruntime.dll', 'NeuralPass/runtime/onnxruntime_providers_shared.dll',
+    'NeuralPass/runtime/DirectML.dll', 'NeuralPass/runtime/NeuralPassWorker.exe',
+    'NeuralPass/runtime/NeuralPassHardwareTest.exe',
+    'NeuralPass/runtime/NeuralPassWorkerHealthTest.exe', 'NeuralPass-hardware-0.json',
+    'NeuralPass-worker-health.json',
     'NeuralPassVulkanTest.exe', 'NeuralPass-vulkan-runtime.json',
     'NeuralPass/PACKAGE.json', 'NeuralPass/SBOM.spdx.json', 'NeuralPass/SHA256SUMS.txt'
 )

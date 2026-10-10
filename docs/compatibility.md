@@ -106,8 +106,9 @@ Its report follows the same pre-install and installed evidence-location rule.
 4. Confirm `reshade-shaders/Shaders/NeuralPass.fx` exists and compiles in ReShade.
 5. Keep **NeuralPass (keep last)** last in technique order.
 6. For a DirectML package, confirm `onnxruntime.dll`,
-   `onnxruntime_providers_shared.dll`, `DirectML.dll`, `NeuralPassWorker.exe`, and
-   the selected `.onnx` model are present.
+   `onnxruntime_providers_shared.dll`, `DirectML.dll`, the isolated
+   `NeuralPass/runtime/NeuralPassWorker.exe` and runtime DLL copies, and the selected
+   `.onnx` model are present.
 7. Generate diagnostics and inspect `ReShade.log` for add-on load or shader errors.
 
 If geometry capture reports unsupported draws, the screen-space path should continue

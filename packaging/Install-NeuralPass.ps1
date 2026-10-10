@@ -113,17 +113,23 @@ $entries = @(
     @{ Source = 'Uninstall-NeuralPass.ps1'; Destination = 'Uninstall-NeuralPass.ps1' },
     @{ Source = 'Diagnose-NeuralPass.ps1'; Destination = 'Diagnose-NeuralPass.ps1' }
 )
-foreach ($optional in @('onnxruntime.dll', 'onnxruntime_providers_shared.dll', 'DirectML.dll',
-                         'NeuralPassWorker.exe')) {
+foreach ($optional in @('onnxruntime.dll', 'onnxruntime_providers_shared.dll', 'DirectML.dll')) {
     if (Test-Path -LiteralPath (Join-Path $package $optional)) {
         $entries += @{ Source = $optional; Destination = $optional }
     }
 }
-foreach ($optional in @('NeuralPassHardwareTest.exe', 'Validate NeuralPass Hardware.cmd',
+foreach ($runtimeFile in @('onnxruntime.dll', 'onnxruntime_providers_shared.dll',
+                            'DirectML.dll', 'NeuralPassWorker.exe',
+                            'NeuralPassHardwareTest.exe', 'NeuralPassWorkerHealthTest.exe')) {
+    $source = "runtime/$runtimeFile"
+    if (Test-Path -LiteralPath (Join-Path $package $source)) {
+        $entries += @{ Source = $source; Destination = "NeuralPass/runtime/$runtimeFile" }
+    }
+}
+foreach ($optional in @('Validate NeuralPass Hardware.cmd',
                          'Validate-NeuralPassHardware.ps1', 'NeuralPassVulkanTest.exe',
                          'Validate NeuralPass Vulkan.cmd', 'Validate-NeuralPassVulkan.ps1',
-                         'NeuralPassWorkerHealthTest.exe', 'Validate NeuralPass Worker.cmd',
-                         'Validate-NeuralPassWorker.ps1')) {
+                         'Validate NeuralPass Worker.cmd', 'Validate-NeuralPassWorker.ps1')) {
     if (Test-Path -LiteralPath (Join-Path $package $optional)) {
         $entries += @{ Source = $optional; Destination = $optional }
     }

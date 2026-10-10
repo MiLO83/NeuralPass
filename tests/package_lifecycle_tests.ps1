@@ -19,6 +19,11 @@ try {
     if (-not $manifest.file_hashes -or $manifest.files.Count -lt 10) {
         throw 'install manifest does not contain per-file integrity evidence'
     }
+    if ((Test-Path -LiteralPath (Join-Path $game 'NeuralPassWorker.exe')) -or
+        -not (Test-Path -LiteralPath (
+            Join-Path $game 'NeuralPass/runtime/NeuralPassWorker.exe') -PathType Leaf)) {
+        throw 'worker executable was not isolated from game-root graphics proxies'
+    }
 
     $vulkanValidator = Join-Path $game 'Validate-NeuralPassVulkan.ps1'
     $vulkanProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList @(

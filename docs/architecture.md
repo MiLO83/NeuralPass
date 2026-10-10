@@ -32,6 +32,10 @@ restart and retry. The packaged worker-health runner performs inference, rolls t
 generation tuple, deliberately terminates the child during a request, and requires
 the restarted worker to complete the retry. Its x86 build talks to the same packaged
 x64 worker used by Win32 games. The ordinary x64 add-on retains its in-process ONNX path.
+Guided installation isolates the child and a private copy of its ONNX/DirectML DLLs
+under `NeuralPass/runtime`; this prevents a game-root ReShade `dxgi.dll` or other
+graphics proxy from entering the worker's dependency search. The add-on prefers the
+isolated path and retains the package-root location only as a legacy/manual fallback.
 
 Persistent storage is rooted below a game-build identity derived from the host
 executable name, size, and modification timestamp. Scene manifests live beneath

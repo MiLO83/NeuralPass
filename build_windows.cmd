@@ -160,17 +160,21 @@ copy /Y "%NP_ROOT%\external\reshade\LICENSE.md" "%NP_DIST%\third-party\ReShade-L
 copy /Y "%NP_ROOT%\external\vulkan-headers\LICENSE.md" "%NP_DIST%\third-party\Vulkan-Headers-LICENSE.txt" >nul
 
 if /I "%NP_MODE%"=="directml" (
+    if not exist "%NP_DIST%\runtime" mkdir "%NP_DIST%\runtime"
     copy /Y "%NP_ROOT%\external\onnxruntime\lib\onnxruntime.dll" "%NP_DIST%\onnxruntime.dll" >nul
     copy /Y "%NP_ROOT%\external\onnxruntime\lib\onnxruntime_providers_shared.dll" "%NP_DIST%\onnxruntime_providers_shared.dll" >nul
     copy /Y "%NP_ROOT%\external\onnxruntime\lib\DirectML.dll" "%NP_DIST%\DirectML.dll" >nul
+    copy /Y "%NP_ROOT%\external\onnxruntime\lib\onnxruntime.dll" "%NP_DIST%\runtime\onnxruntime.dll" >nul
+    copy /Y "%NP_ROOT%\external\onnxruntime\lib\onnxruntime_providers_shared.dll" "%NP_DIST%\runtime\onnxruntime_providers_shared.dll" >nul
+    copy /Y "%NP_ROOT%\external\onnxruntime\lib\DirectML.dll" "%NP_DIST%\runtime\DirectML.dll" >nul
     if /I "%NP_ARCH%"=="x86" (
-        copy /Y "%NP_WORKER_BUILD%\Release\NeuralPassWorker.exe" "%NP_DIST%\NeuralPassWorker.exe" >nul
-        copy /Y "%NP_WORKER_BUILD%\Release\neuralpass_onnx_smoke_tests.exe" "%NP_DIST%\NeuralPassHardwareTest.exe" >nul
+        copy /Y "%NP_WORKER_BUILD%\Release\NeuralPassWorker.exe" "%NP_DIST%\runtime\NeuralPassWorker.exe" >nul
+        copy /Y "%NP_WORKER_BUILD%\Release\neuralpass_onnx_smoke_tests.exe" "%NP_DIST%\runtime\NeuralPassHardwareTest.exe" >nul
     ) else (
-        copy /Y "%NP_BUILD%\Release\NeuralPassWorker.exe" "%NP_DIST%\NeuralPassWorker.exe" >nul
-        copy /Y "%NP_BUILD%\Release\neuralpass_onnx_smoke_tests.exe" "%NP_DIST%\NeuralPassHardwareTest.exe" >nul
+        copy /Y "%NP_BUILD%\Release\NeuralPassWorker.exe" "%NP_DIST%\runtime\NeuralPassWorker.exe" >nul
+        copy /Y "%NP_BUILD%\Release\neuralpass_onnx_smoke_tests.exe" "%NP_DIST%\runtime\NeuralPassHardwareTest.exe" >nul
     )
-    copy /Y "%NP_BUILD%\Release\neuralpass_worker_smoke_tests.exe" "%NP_DIST%\NeuralPassWorkerHealthTest.exe" >nul
+    copy /Y "%NP_BUILD%\Release\neuralpass_worker_smoke_tests.exe" "%NP_DIST%\runtime\NeuralPassWorkerHealthTest.exe" >nul
     if errorlevel 1 (
         echo ERROR: The worker-health evidence runner was not produced.
         goto :failed

@@ -6,7 +6,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$executable = Join-Path $root 'NeuralPassHardwareTest.exe'
+$runtimeRoot = if (Test-Path -LiteralPath (Join-Path $root 'PACKAGE.json') -PathType Leaf) {
+    Join-Path $root 'runtime'
+} else { Join-Path $root 'NeuralPass/runtime' }
+$executable = Join-Path $runtimeRoot 'NeuralPassHardwareTest.exe'
 $model = Get-ChildItem -LiteralPath (Join-Path $root 'models/downloads') -Filter '*.onnx' -File |
     Sort-Object Name | Select-Object -First 1
 if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {

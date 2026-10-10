@@ -72,7 +72,9 @@ builds the x64 temporal pipeline with its clearly-labelled preview backend. The
 third builds/tests a Win32 add-on and creates `dist\NeuralPass-x86` with an x64
 `NeuralPassWorker.exe`. Microsoft's current ONNX Runtime DirectML package has no
 Win32 runtime, so the add-on exchanges bounded tiles with that architecture-matched
-host through a private named pipe and an 8 MiB shared-memory mailbox. The fourth
+host through a private named pipe and an 8 MiB shared-memory mailbox. Guided installs
+place the worker and its private runtime DLLs under `NeuralPass/runtime`, away from
+game-root graphics proxy DLLs. The fourth
 command remains useful when a fully self-contained non-neural Win32 preview is wanted.
 
 Every assembled package records the full source revision and its commit timestamp

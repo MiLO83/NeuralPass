@@ -1639,7 +1639,10 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         const auto model = g_addon_directory / "models" / "downloads" / (preset + "-9.onnx");
 #if defined(_WIN32) && !defined(_WIN64)
         try {
-            const auto worker = g_addon_directory / "NeuralPassWorker.exe";
+            auto worker = g_addon_directory / "NeuralPass" / "runtime" /
+                "NeuralPassWorker.exe";
+            if (!std::filesystem::is_regular_file(worker))
+                worker = g_addon_directory / "NeuralPassWorker.exe";
             if (std::filesystem::exists(model) && std::filesystem::exists(worker))
                 return neuralpass::make_worker_backend(
                     worker.string(), model.string(), state->directml_enabled,
