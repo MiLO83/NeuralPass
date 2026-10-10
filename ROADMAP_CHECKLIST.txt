@@ -168,11 +168,13 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [~] Replace the WSL filesystem bridge with NeuralPassWorker.exe.
     Evidence: packaged fixed-model inference now has a native x64 worker used by the
     Win32 add-on. Guided installs isolate the worker and private ONNX/DirectML copies
-    from game-root graphics proxy DLLs; prompt-driven diffusion still uses the opt-in
-    legacy bridge.
+    from game-root graphics proxy DLLs; prompt-driven SD-Turbo still uses a separately
+    managed, per-game opt-in bridge.
 [x] Add versioned named-pipe control and bounded shared-memory transport.
-    Evidence: protocol-v1 control records and a private 8 MiB single-tile mailbox pass
-    native x64 and x86-to-x64 ONNX integration tests plus portable bounds tests.
+    Evidence: protocol-v1 control records and a private 8 MiB mailbox carry one coherent
+    full-frame request through a bounded inference fit and restore the original output
+    dimensions. Native x64 and x86-to-x64 ONNX integration tests plus portable bounds
+    tests pass.
 [x] Reject stale scene, style, binding, and request generations.
     Evidence: the worker echoes all four identities; portable mutation tests prove
     each mismatch and failed response is rejected before shared output is consumed.
@@ -186,9 +188,16 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     portable tests cover FP16 sanitization, bounded inference input, and neutral
     scRGB/PQ luminance round trips; the Windows add-on build and full native suite
     pass. HDR monitor/game evidence and HLG remain.
-[ ] Add optional CUDA acceleration.
-[!] Restore and verify the current StreamDiffusion environment.
-    Blocker: the moved WSL environment is missing torch and onnxruntime packages.
+[~] Add optional CUDA acceleration.
+    Evidence: the external prompt bridge runs the pinned official SD-Turbo revision
+    through StreamDiffusion with PyTorch 2.9.1+cu128 on NVIDIA RTX 5060 Ti. A coherent
+    512x288 offline frame measured 61.9 ms median (16.17 FPS); simultaneous Steel Nomad
+    load measured 114.2 ms median (8.76 FPS). CUDA is not yet packaged or managed by
+    NeuralPassWorker, and AMD/Intel use remains outside this path.
+[x] Restore and verify the current StreamDiffusion environment.
+    Evidence: the isolated stream venv imports StreamDiffusion with pinned NumPy/OpenCV,
+    reports CUDA available, produces a coherent SD-Turbo output, and completed a live
+    Steel Nomad run without bridge failure.
 [x] Separate first-observation styling and newly-visible inpainting masks.
     Evidence: visibility causes now feed two disjoint masks whose union is the only
     commit-authorized reveal set. Newly disoccluded/front-facing/off-screen texels
@@ -343,13 +352,20 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     recover from forced worker death. The native Vulkan x86/x64 workload destroys
     and recreates its logical device before repeating capture, replacement,
     synchronization, and readback. Forced GPU removal remains.
-[ ] Steel Nomad D3D12 stress validation passes.
+[~] Steel Nomad D3D12 stress validation passes.
+    Evidence: one complete 1920x1080 SDR run scored 2908 at 29.08 FPS with 1,921 effect
+    frames and 240 coherent full-frame submissions, without a crash or device removal.
+    The adapter identified 157 explicit-UV pipelines and 8.19 million UV draws, but the
+    run produced no material identity or surface pixels; descriptor-less geometry
+    identity/replay diagnostics are therefore the active D3D12 validation gap. This is
+    neither a stress pass nor mesh-baking proof.
 [ ] Each API completes a 60-minute soak without crash or device removal.
 [ ] Clean-machine install, update, removal, and signature verification pass.
-[~] GitHub Windows/Linux x86/x64 CI is green.
-    Evidence: Linux validates the portable core; Windows builds/tests/packages the
-    x64 DirectML and x86 worker-backed ReShade add-ons, including native D3D9/10/11/12
-    suites, and uploads both. DirectML execution passes on the development NVIDIA
-    GPU; hosted runners have no valid adapter. AMD/Intel and game evidence remain.
+[x] GitHub Windows/Linux x86/x64 CI is green.
+    Evidence: run 38033335132 at commit 5cc12ec passed. Linux validates the portable
+    core; Windows builds/tests/packages the x64 DirectML and x86 worker-backed ReShade
+    add-ons, including native D3D9/10/11/12 suites, and uploads both. DirectML execution
+    passes on the development NVIDIA GPU; hosted runners have no valid adapter.
+    AMD/Intel and game evidence remain separate acceptance gates.
 [ ] No open severity-1 or severity-2 defects.
 [ ] Signed v1.0 release published.

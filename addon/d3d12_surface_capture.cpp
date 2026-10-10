@@ -917,16 +917,28 @@ void SurfaceCapture::reset() {
 bool SurfaceCapture::replay(void *native_command_list, const capture::UvInput &uv,
                             std::uint64_t material_id,
                             const capture::DrawCommand &draw, int) {
-    if (impl_ == nullptr || native_command_list == nullptr || material_id == 0 ||
-        !uv.valid() || !draw.target_compatible || draw.inside_render_pass ||
-        draw.pipeline == 0 || draw.render_target_count == 0)
-        return false;
+    if (impl_ == nullptr) return false;
     std::lock_guard lock(impl_->mutex);
+    const auto reject = [&](std::uint64_t &reason) {
+        ++impl_->statistics.rejected_draws;
+        ++reason;
+        return false;
+    };
+    if (native_command_list == nullptr || material_id == 0 || !uv.valid())
+        return reject(impl_->statistics.rejected_invalid_input);
+    if (!draw.target_compatible || draw.render_target_count == 0)
+        return reject(impl_->statistics.rejected_target);
+    if (draw.inside_render_pass)
+        return reject(impl_->statistics.rejected_render_pass);
+    if (draw.pipeline == 0)
+        return reject(impl_->statistics.rejected_pipeline);
     auto *commands = static_cast<ID3D12GraphicsCommandList *>(native_command_list);
-    if (commands->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT) return false;
+    if (commands->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT)
+        return reject(impl_->statistics.rejected_command_list);
     const auto capture_pipeline = impl_->capture_pipeline(
         draw.pipeline, uv, material_id, draw);
-    if (capture_pipeline == 0) return false;
+    if (capture_pipeline == 0)
+        return reject(impl_->statistics.rejected_companion_pipeline);
     if (!impl_->cleared) impl_->clear(commands);
 
     // Clone the complete bounded table and change only the selected SRV. The
@@ -946,7 +958,7 @@ bool SurfaceCapture::replay(void *native_command_list, const capture::UvInput &u
         if (replacement_table != 0)
             api_commands->bind_descriptor_table(reshade::api::shader_stage::pixel,
                 layout, draw.source_descriptor_param, original_table);
-        return false;
+        return reject(impl_->statistics.rejected_execution);
     }
     if (replacement_table != 0) {
         api_commands->bind_descriptor_table(reshade::api::shader_stage::pixel,
@@ -959,7 +971,8 @@ bool SurfaceCapture::replay(void *native_command_list, const capture::UvInput &u
     commands->OMSetRenderTargets(static_cast<UINT>(impl_->target_views.size()),
         impl_->target_views.data(), FALSE,
         draw.depth_stencil_view != 0 ? &capture_depth : nullptr);
-    if (!impl_->execute(commands, draw)) return false;
+    if (!impl_->execute(commands, draw))
+        return reject(impl_->statistics.rejected_execution);
     ++impl_->statistics.replayed_draws;
     commands->SetPipelineState(
         reinterpret_cast<ID3D12PipelineState *>(draw.pipeline));

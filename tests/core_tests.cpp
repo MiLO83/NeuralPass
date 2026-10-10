@@ -393,6 +393,19 @@ static void test_binding_identity_is_pipeline_and_slot_specific() {
     transient[0].restart_stable = false;
     require(!make_binding_instance_key(pipeline, transient, true).restart_stable,
             "transient descriptor identity was marked restart-stable");
+
+    const std::array<DescriptorIdentity, 1> geometry {{
+        {0xfffd000000000000ull, 0x12345678, true},
+    }};
+    const auto geometry_only = make_binding_instance_key(pipeline, geometry, false);
+    require(geometry_only.valid() && !geometry_only.restart_stable,
+            "geometry-only fallback was not a valid session identity");
+    const std::array<DescriptorIdentity, 1> other_geometry {{
+        {0xfffd000000000000ull, 0x87654321, true},
+    }};
+    require(make_binding_instance_key(pipeline, other_geometry, false).value !=
+                geometry_only.value,
+            "different session geometry shared a fallback identity");
 }
 
 static void test_depth_pyramid_and_conservative_raymarch() {

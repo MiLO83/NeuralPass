@@ -468,6 +468,13 @@ void test_backend_replay_restores_pso_and_target() {
     draw.render_target_views[0] = rtv.ptr; draw.render_target_count = 1;
     draw.target_compatible = true;
     constexpr std::uint64_t material = 0x1122334455667788ull;
+    auto rejected_draw = draw;
+    rejected_draw.target_compatible = false;
+    require(!capture.replay(list.Get(), uv, material, rejected_draw),
+            "D3D12 backend accepted an incompatible capture target");
+    require(capture.statistics().rejected_draws == 1 &&
+                capture.statistics().rejected_target == 1,
+            "D3D12 target rejection was not classified");
     capture.register_prebuilt_variant(draw.pipeline, uv, material, draw,
         reinterpret_cast<std::uint64_t>(capture_pso.Get()));
     require(capture.replay(list.Get(), uv, material, draw),

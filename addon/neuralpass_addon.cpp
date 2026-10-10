@@ -188,6 +188,10 @@ std::atomic_uint64_t g_pretransform_probe_successes = 0;
 std::atomic_uint64_t g_pretransform_uv_samples = 0;
 std::atomic_uint64_t g_material_draws_seen = 0;
 std::atomic_uint64_t g_material_texture_candidates = 0;
+std::atomic_uint64_t g_uv_draws_without_texture = 0;
+std::atomic_uint64_t g_uv_draws_without_identity_resources = 0;
+std::atomic_uint64_t g_uv_draws_without_pipeline_identity = 0;
+std::atomic_uint64_t g_geometry_only_material_draws = 0;
 std::atomic_uint64_t g_restart_stable_material_draws = 0;
 std::atomic_uint64_t g_session_material_draws = 0;
 std::atomic_uint64_t g_surface_frames_captured = 0;
@@ -838,7 +842,6 @@ neuralpass::BindingInstanceKey current_material_id(reshade::api::device *device,
         resources.push_back({slot, fingerprint.value, fingerprint.content_backed});
     }
     const auto texture_resource_count = resources.size();
-    if (texture_resource_count == 0) return {};
     constexpr std::uint64_t k_vertex_slot_base = 0xfffd000000000000ull;
     constexpr std::uint64_t k_index_slot = 0xfffe000000000000ull;
     auto append_geometry = [&](reshade::api::resource resource, std::uint64_t slot,
@@ -880,7 +883,25 @@ neuralpass::BindingInstanceKey current_material_id(reshade::api::device *device,
         }
     }
     complete_pipeline = complete_pipeline && !pipelines.empty();
-    return neuralpass::make_binding_instance_key(pipelines, resources, complete_pipeline);
+    if (texture_resource_count == 0) ++g_uv_draws_without_texture;
+    if (resources.empty()) {
+        ++g_uv_draws_without_identity_resources;
+        return {};
+    }
+    if (pipelines.empty()) {
+        ++g_uv_draws_without_pipeline_identity;
+        return {};
+    }
+
+    // A sampled texture is needed for a durable, replaceable material identity,
+    // but not for collecting screen observations into a process-local UV atlas.
+    // Geometry-only identities let descriptor-less engines participate without
+    // ever persisting or installing a replacement against an unproven texture.
+    const auto material = neuralpass::make_binding_instance_key(
+        pipelines, resources, complete_pipeline && texture_resource_count != 0);
+    if (material.valid() && texture_resource_count == 0)
+        ++g_geometry_only_material_draws;
+    return material;
 }
 
 void on_baker_bind_vertex_buffers(reshade::api::command_list *command_list,
@@ -2833,6 +2854,7 @@ void on_init(reshade::api::effect_runtime *runtime) {
 
 void on_destroy(reshade::api::effect_runtime *runtime) {
     auto *state = runtime->get_private_data<RuntimeState>();
+    neuralpass::capture::CaptureStatistics final_capture_statistics;
     if (state != nullptr) {
         {
             std::lock_guard lock(state->mutex);
@@ -2847,6 +2869,7 @@ void on_destroy(reshade::api::effect_runtime *runtime) {
             std::lock_guard lock(g_baker_probe_mutex);
             if (const auto found = g_surface_captures.find(runtime->get_device());
                 found != g_surface_captures.end()) {
+                final_capture_statistics = found->second->statistics();
                 capture = std::move(found->second);
                 g_surface_captures.erase(found);
             }
@@ -2879,6 +2902,19 @@ void on_destroy(reshade::api::effect_runtime *runtime) {
                << "restart_stable_material_draws=" << g_restart_stable_material_draws.load() << '\n'
                << "session_material_draws=" << g_session_material_draws.load() << '\n'
                << "material_texture_candidates=" << g_material_texture_candidates.load() << '\n'
+               << "uv_draws_without_texture=" << g_uv_draws_without_texture.load() << '\n'
+               << "uv_draws_without_identity_resources=" << g_uv_draws_without_identity_resources.load() << '\n'
+               << "uv_draws_without_pipeline_identity=" << g_uv_draws_without_pipeline_identity.load() << '\n'
+               << "geometry_only_material_draws=" << g_geometry_only_material_draws.load() << '\n'
+               << "capture_replayed_draws=" << final_capture_statistics.replayed_draws << '\n'
+               << "capture_rejected_draws=" << final_capture_statistics.rejected_draws << '\n'
+               << "capture_rejected_invalid_input=" << final_capture_statistics.rejected_invalid_input << '\n'
+               << "capture_rejected_target=" << final_capture_statistics.rejected_target << '\n'
+               << "capture_rejected_render_pass=" << final_capture_statistics.rejected_render_pass << '\n'
+               << "capture_rejected_pipeline=" << final_capture_statistics.rejected_pipeline << '\n'
+               << "capture_rejected_command_list=" << final_capture_statistics.rejected_command_list << '\n'
+               << "capture_rejected_companion_pipeline=" << final_capture_statistics.rejected_companion_pipeline << '\n'
+               << "capture_rejected_execution=" << final_capture_statistics.rejected_execution << '\n'
                << "surface_frames_captured=" << g_surface_frames_captured.load() << '\n'
                << "surface_pixels_captured=" << g_surface_pixels_captured.load() << '\n'
                << "swapchain_resets=" << g_swapchain_resets.load() << '\n'
@@ -3168,6 +3204,12 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         static_cast<unsigned long long>(g_session_material_draws.load()));
     ImGui::Text("Persistent texture candidates sampled: %llu",
         static_cast<unsigned long long>(g_material_texture_candidates.load()));
+    ImGui::Text("Geometry-only session draws: %llu  No texture: %llu",
+        static_cast<unsigned long long>(g_geometry_only_material_draws.load()),
+        static_cast<unsigned long long>(g_uv_draws_without_texture.load()));
+    ImGui::Text("Identity rejects - resources: %llu  pipeline: %llu",
+        static_cast<unsigned long long>(g_uv_draws_without_identity_resources.load()),
+        static_cast<unsigned long long>(g_uv_draws_without_pipeline_identity.load()));
     if (!material_ids.empty()) {
         if (state->selected_binding == 0 ||
             !std::binary_search(material_ids.begin(), material_ids.end(), state->selected_binding)) {
@@ -3257,20 +3299,14 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         }
         ImGui::TextDisabled("Strength changes switch to an isolated style-cache namespace.");
     }
-    std::uint64_t replayed_draws = 0;
-    std::uint64_t capture_drops = 0;
-    std::uint64_t replacement_draws = 0;
-    std::uint64_t rejected_replacements = 0;
+    neuralpass::capture::CaptureStatistics capture_statistics;
     const char *capture_backend = "No";
     {
         std::lock_guard lock(g_baker_probe_mutex);
         if (const auto found = g_surface_captures.find(runtime->get_device());
             found != g_surface_captures.end()) {
             const auto statistics = found->second->statistics();
-            replayed_draws = statistics.replayed_draws;
-            capture_drops = statistics.dropped_frames;
-            replacement_draws = statistics.replacement_draws;
-            rejected_replacements = statistics.rejected_replacements;
+            capture_statistics = statistics;
             switch (found->second->backend()) {
             case neuralpass::capture::GraphicsBackend::d3d9: capture_backend = "D3D9"; break;
             case neuralpass::capture::GraphicsBackend::d3d10: capture_backend = "D3D10"; break;
@@ -3281,11 +3317,17 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         }
     }
     ImGui::Text("%s UV replay draws: %llu  Readback drops: %llu", capture_backend,
-        static_cast<unsigned long long>(replayed_draws),
-        static_cast<unsigned long long>(capture_drops));
+        static_cast<unsigned long long>(capture_statistics.replayed_draws),
+        static_cast<unsigned long long>(capture_statistics.dropped_frames));
     ImGui::Text("Replacement draws: %llu  Rejected source layouts: %llu",
-        static_cast<unsigned long long>(replacement_draws),
-        static_cast<unsigned long long>(rejected_replacements));
+        static_cast<unsigned long long>(capture_statistics.replacement_draws),
+        static_cast<unsigned long long>(capture_statistics.rejected_replacements));
+    ImGui::Text("Replay rejects: %llu  target:%llu pass:%llu PSO:%llu execute:%llu",
+        static_cast<unsigned long long>(capture_statistics.rejected_draws),
+        static_cast<unsigned long long>(capture_statistics.rejected_target),
+        static_cast<unsigned long long>(capture_statistics.rejected_render_pass),
+        static_cast<unsigned long long>(capture_statistics.rejected_companion_pipeline),
+        static_cast<unsigned long long>(capture_statistics.rejected_execution));
     ImGui::Text("Surface frames: %llu  Supported pixels: %llu",
         static_cast<unsigned long long>(g_surface_frames_captured.load()),
         static_cast<unsigned long long>(g_surface_pixels_captured.load()));

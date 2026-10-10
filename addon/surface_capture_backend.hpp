@@ -114,6 +114,14 @@ struct CaptureStatistics {
     std::uint64_t dropped_frames = 0;
     std::uint64_t replacement_draws = 0;
     std::uint64_t rejected_replacements = 0;
+    std::uint64_t rejected_draws = 0;
+    std::uint64_t rejected_invalid_input = 0;
+    std::uint64_t rejected_target = 0;
+    std::uint64_t rejected_render_pass = 0;
+    std::uint64_t rejected_pipeline = 0;
+    std::uint64_t rejected_command_list = 0;
+    std::uint64_t rejected_companion_pipeline = 0;
+    std::uint64_t rejected_execution = 0;
 };
 
 class SurfaceCaptureBackend {
