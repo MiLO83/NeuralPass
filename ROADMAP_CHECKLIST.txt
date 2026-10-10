@@ -233,7 +233,11 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     Evidence: D3D10/D3D11 replay/replacement and D3D12 resource/barrier/fence/readback plus
     native descriptor-isolation and backend replay WARP suites pass; production-created
     D3D12 companion PSOs and Vulkan SwiftShader remain; broader D3D9 hardware remains.
-[ ] Resize, device-loss, corrupt-cache, and worker-restart tests pass.
+[~] Resize, device-loss, corrupt-cache, and worker-restart tests pass.
+    Evidence: swapchain resize teardown releases adapter resources before reset;
+    native D3D9/10/11/12 tests recreate capture at new dimensions without stale
+    readback, and cache corruption is isolated. Forced removal and worker restart
+    tests plus Vulkan runtime coverage remain.
 [ ] Steel Nomad D3D12 stress validation passes.
 [ ] Each API completes a 60-minute soak without crash or device removal.
 [ ] Clean-machine install, update, removal, and signature verification pass.

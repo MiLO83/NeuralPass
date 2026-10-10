@@ -309,6 +309,10 @@ void test_d3d9_geometry_capture() {
     std::cout << "D3D9 test device: "
               << (device_caps.DeviceType == D3DDEVTYPE_HAL ? "HAL" : "reference") << '\n';
 
+    require(capture.initialize(device, 5, 3) && capture.width() == 5 && capture.height() == 3,
+        "D3D9 capture resources did not survive reset-style reinitialization");
+    require(!capture.finish_frame().has_value(),
+        "D3D9 reinitialization retained stale readback state");
     capture.reset();
     release(backbuffer); release(source_texture); release(index_buffer);
     release(vertex_buffer); release(declaration); release(pixel_shader);

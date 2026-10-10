@@ -313,6 +313,10 @@ void test_d3d10_geometry_capture() {
         capture.statistics().replacement_draws == 3,
         "D3D10 capture statistics are incorrect");
 
+    require(capture.initialize(device, 5, 3) && capture.width() == 5 && capture.height() == 3,
+        "D3D10 capture resources did not survive resize reinitialization");
+    require(!capture.finish_frame().has_value(),
+        "D3D10 reinitialization retained stale readback state");
     capture.reset();
     release(depth_state); release(blend_state); release(sampler);
     release(source_view); release(source_texture);

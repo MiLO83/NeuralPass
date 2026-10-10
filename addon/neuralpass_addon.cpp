@@ -106,6 +106,7 @@ std::atomic_uint64_t g_restart_stable_material_draws = 0;
 std::atomic_uint64_t g_session_material_draws = 0;
 std::atomic_uint64_t g_surface_frames_captured = 0;
 std::atomic_uint64_t g_surface_pixels_captured = 0;
+std::atomic_uint64_t g_swapchain_resets = 0;
 std::unordered_set<std::uint64_t> g_materials_seen;
 std::unordered_set<std::uint64_t> g_restart_stable_materials;
 std::unordered_map<std::uint64_t, int> g_source_slot_overrides;
@@ -1965,9 +1966,20 @@ void on_init_swapchain(reshade::api::swapchain *swapchain, bool) {
     g_swapchain_color_spaces[swapchain->get_hwnd()] = swapchain->get_color_space();
 }
 
-void on_destroy_swapchain(reshade::api::swapchain *swapchain, bool) {
+void on_destroy_swapchain(reshade::api::swapchain *swapchain, bool resize) {
     std::lock_guard lock(g_baker_probe_mutex);
     g_swapchain_color_spaces.erase(swapchain->get_hwnd());
+    if (resize && swapchain->get_device()->get_api() == reshade::api::device_api::d3d9) {
+        if (const auto found = g_surface_captures.find(swapchain->get_device());
+            found != g_surface_captures.end()) {
+            // D3D9 default-pool capture resources must be released before
+            // IDirect3DDevice9::Reset. on_begin_effects recreates them at the new
+            // dimensions after the swapchain returns. Modern backends preserve
+            // their API attachment and resize their surfaces in initialize().
+            found->second->reset();
+            ++g_swapchain_resets;
+        }
+    }
 }
 
 void on_present(reshade::api::command_queue *, reshade::api::swapchain *swapchain,
@@ -2154,6 +2166,7 @@ void on_destroy(reshade::api::effect_runtime *runtime) {
                << "material_texture_candidates=" << g_material_texture_candidates.load() << '\n'
                << "surface_frames_captured=" << g_surface_frames_captured.load() << '\n'
                << "surface_pixels_captured=" << g_surface_pixels_captured.load() << '\n'
+               << "swapchain_resets=" << g_swapchain_resets.load() << '\n'
                << "unique_materials=" << material_count << '\n';
     }
     runtime->destroy_private_data<RuntimeState>();
@@ -2477,6 +2490,8 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
     ImGui::Text("Surface frames: %llu  Supported pixels: %llu",
         static_cast<unsigned long long>(g_surface_frames_captured.load()),
         static_cast<unsigned long long>(g_surface_pixels_captured.load()));
+    ImGui::Text("D3D9 pre-reset releases: %llu",
+        static_cast<unsigned long long>(g_swapchain_resets.load()));
     if (g_uv_draws_seen.load() == 0)
         ImGui::TextWrapped("Waiting for an explicit or location-inferred mesh UV vertex input.");
     else

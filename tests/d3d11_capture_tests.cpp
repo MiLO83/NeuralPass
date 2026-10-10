@@ -477,6 +477,10 @@ void test_triangle_replay_produces_material_uv() {
     require(cutout.material_id == first_material_id,
         "fully transparent source texel was incorrectly captured as visible geometry");
 
+    require(capture.initialize(device, 5, 3) && capture.width() == 5 && capture.height() == 3,
+        "D3D11 capture resources did not survive resize reinitialization");
+    require(!capture.finish_frame(context).has_value(),
+        "D3D11 reinitialization retained stale readback state");
     capture.reset();
     release(target_staging);
     release(unsupported_view);

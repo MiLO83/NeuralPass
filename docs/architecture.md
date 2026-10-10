@@ -118,6 +118,13 @@ late frames are dropped in favor of the newest complete capture. The legacy D3D9
 preview is the explicit exception and reports that limitation because its portable
 system-memory transfer is synchronous.
 
+Swapchain teardown with the resize flag releases D3D9 capture resources before
+`IDirect3DDevice9::Reset`, as required for default-pool objects. Modern adapters
+retain their API attachment and atomically recreate size-dependent surfaces when
+the next effect frame observes new backbuffer dimensions. Native D3D9/10/11/12
+tests exercise reset-style reinitialization and verify that stale readback is not
+returned.
+
 The canonical planes map naturally to every target API: a two-component
 unsigned target for the 64-bit stable material ID, a two-component float target
 for mesh UV, float depth targets, and a confidence/validity target. The exact GPU

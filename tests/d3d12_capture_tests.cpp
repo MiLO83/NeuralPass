@@ -94,6 +94,9 @@ void test_warp_surfaces_and_barriers() {
                 "could not arm second completion event");
         require(WaitForSingleObject(event, 5000) == WAIT_OBJECT_0,
                 "second D3D12 WARP capture command timed out");
+        require(backend.initialize(device, 5, 3) &&
+                backend.width() == 5 && backend.height() == 3,
+                "D3D12 capture resources did not survive resize reinitialization");
         capture.reset();
     } catch (...) {
         if (event != nullptr) CloseHandle(event);
