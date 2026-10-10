@@ -98,11 +98,13 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     Evidence: experimental x86/x64 Shader Model 4 direct/indexed replay, four-plane
     asynchronous capture, complete touched-state restoration, coverage-safe
     RGBA8/BGRA8 replacement, and same-source material isolation pass D3D10 WARP.
-    Device loss, hardware/game evidence, and soak testing remain.
+    The complete workload repeats after destroying the first WARP device. Forced
+    device loss, hardware/game evidence, and soak testing remain.
 [~] Production D3D11 x86/x64 capture and replacement.
     Evidence: x86/x64 D3D11 capture plus coverage-safe RGBA8/BGRA8 substitution passes WARP;
     direct/indirect indexed and non-indexed instanced draws are covered; broad
-    formats, and real-game validation remain.
+    formats, and real-game validation remain. The complete workload repeats after
+    destroying the first WARP device; forced removal remains unverified.
 [~] Production D3D12 x64 capture and replacement.
     Evidence: experimental x64 adapter records graphics PSOs, replays direct/indexed
     and GPU-indirect draws, restores PSO/MRT/DSV state, and uses explicit barriers plus
@@ -110,7 +112,8 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     and decoded readback. Bounded-table RGBA8/BGRA8 replacement tracks source states,
     copies only covered rows, and has a WARP descriptor isolation/restoration test;
     actual backend replay restores the PSO and render target under WARP; production
-    companion-PSO creation inside ReShade and real-game evidence remain.
+    companion-PSO creation inside ReShade and real-game evidence remain. All three
+    WARP workloads repeat across a second set of fresh device lifetimes.
 [~] Production Vulkan x86/x64 capture and replacement.
     Evidence: an experimental x86/x64 ReShade adapter records Vulkan pipeline metadata,
     instruments a proven float2 vertex UV input into a dedicated output varying,
@@ -261,11 +264,12 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [~] Resize, device-loss, corrupt-cache, and worker-restart tests pass.
     Evidence: swapchain resize teardown releases adapter resources before reset;
     the native D3D9 test performs an actual device Reset and proves replacement and
-    capture after recreation, while D3D10/11/12 tests recreate capture at new
-    dimensions without stale readback. Cache corruption is isolated, and native x64
-    plus x86-to-x64 tests recover from forced worker death. The native Vulkan x86/x64
-    workload destroys and recreates its logical device before repeating capture,
-    replacement, synchronization, and readback. Forced GPU removal remains.
+    capture after recreation. D3D10/11/12 tests both recreate capture at new
+    dimensions without stale readback and repeat their complete WARP workloads on
+    fresh devices. Cache corruption is isolated, and native x64 plus x86-to-x64 tests
+    recover from forced worker death. The native Vulkan x86/x64 workload destroys
+    and recreates its logical device before repeating capture, replacement,
+    synchronization, and readback. Forced GPU removal remains.
 [ ] Steel Nomad D3D12 stress validation passes.
 [ ] Each API completes a 60-minute soak without crash or device removal.
 [ ] Clean-machine install, update, removal, and signature verification pass.

@@ -10,9 +10,9 @@ full add-on build of ReShade. It is not suitable for protected multiplayer games
 | Windows / x64 | Automated DirectML build/package plus native D3D9/10/11/12 and Vulkan tests |
 | Windows / x86 | Automated worker-backed DirectML build/package; 32-bit D3D9/10/11/12/Vulkan suites and x86-to-x64 ONNX transport pass |
 | D3D9 | Experimental SM3 direct/indexed capture; synchronous readback, no fragment depth, lockable 32-bit replacement only |
-| D3D10 | Experimental direct/indexed geometry capture and RGBA8/BGRA8 replacement |
-| D3D11 | Experimental geometry capture and RGBA8/BGRA8 replacement |
-| D3D12 | Experimental PSO replay, source sampling, bounded-table RGBA8/BGRA8 replacement, barriers, and fence/readback ring; real-game evidence pending |
+| D3D10 | Experimental direct/indexed geometry capture and RGBA8/BGRA8 replacement; fresh-device WARP recreation passes |
+| D3D11 | Experimental geometry capture and RGBA8/BGRA8 replacement; fresh-device WARP recreation passes |
+| D3D12 | Experimental PSO replay, source sampling, bounded-table RGBA8/BGRA8 replacement, barriers, and fence/readback ring; fresh-device WARP recreation passes, real-game evidence pending |
 | Vulkan | Experimental SPIR-V UV/source capture and transfer-source RGBA8/BGRA8 bounded-table replacement; x86/x64 native capture, replacement isolation, and logical-device recreation pass on NVIDIA, but ReShade/game evidence remains |
 | SDR RGBA8 | Supported preview path |
 | HDR / scRGB | Experimental FP16 scRGB and RGB10A2 HDR10/PQ paths with declared-color-space validation and luminance-preserving composition; monitor/game validation pending |

@@ -532,10 +532,12 @@ void test_backend_replay_restores_pso_and_target() {
 
 int main() {
     try {
-        test_warp_surfaces_and_barriers();
-        test_descriptor_replacement_isolation();
-        test_backend_replay_restores_pso_and_target();
-        std::cout << "D3D12 WARP capture tests passed\n";
+        for (int device_lifetime = 0; device_lifetime != 2; ++device_lifetime) {
+            test_warp_surfaces_and_barriers();
+            test_descriptor_replacement_isolation();
+            test_backend_replay_restores_pso_and_target();
+        }
+        std::cout << "D3D12 WARP capture and device recreation tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {
         std::cerr << "D3D12 capture test failure: " << error.what() << '\n';

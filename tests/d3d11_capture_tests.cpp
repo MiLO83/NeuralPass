@@ -518,7 +518,8 @@ void test_triangle_replay_produces_material_uv() {
 int main() {
     try {
         test_triangle_replay_produces_material_uv();
-        std::cout << "NeuralPass D3D11 surface capture test passed\n";
+        test_triangle_replay_produces_material_uv();
+        std::cout << "NeuralPass D3D11 surface capture and device recreation test passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {
         std::cerr << "FAIL: " << error.what() << '\n';

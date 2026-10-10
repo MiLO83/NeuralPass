@@ -285,9 +285,9 @@ contract.
 | Graphics API | Geometry capture status |
 | --- | --- |
 | D3D9 | Experimental Shader Model 3 direct/indexed replay and lockable RGBA/BGRA replacement; native HAL reset/recreation test |
-| D3D10 | Experimental direct/indexed replay and RGBA8/BGRA8 replacement; automated WARP coverage |
-| D3D11 | Experimental draw replay and RGBA8/BGRA8 replacement; automated WARP coverage |
-| D3D12 | Experimental direct/indirect PSO replay, readback, and bounded-table RGBA8/BGRA8 replacement; game validation pending |
+| D3D10 | Experimental direct/indexed replay and RGBA8/BGRA8 replacement; automated WARP recreation coverage |
+| D3D11 | Experimental draw replay and RGBA8/BGRA8 replacement; automated WARP recreation coverage |
+| D3D12 | Experimental direct/indirect PSO replay, readback, and bounded-table RGBA8/BGRA8 replacement; WARP recreation covered, game validation pending |
 | Vulkan | Experimental SPIR-V UV/source capture, asynchronous readback, and bounded-table RGBA8/BGRA8 replacement; x86/x64 native NVIDIA capture/recreation evidence, game validation pending |
 
 Atlas snapshots use a versioned, checksummed `.npatlas` format. Writes create a

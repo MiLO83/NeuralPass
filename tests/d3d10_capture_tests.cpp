@@ -331,7 +331,8 @@ void test_d3d10_geometry_capture() {
 int main() {
     try {
         test_d3d10_geometry_capture();
-        std::cout << "NeuralPass D3D10 surface capture test passed\n";
+        test_d3d10_geometry_capture();
+        std::cout << "NeuralPass D3D10 surface capture and device recreation test passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {
         std::cerr << "FAIL: " << error.what() << '\n';
