@@ -125,10 +125,12 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     Vulkan driver tests execute the instrumented four-MRT pipeline and validate IDs,
     UVs, gradients, depth, fence/readback, and clone/covered-texel replacement isolation
     on NVIDIA, then destroy and recreate the logical device and repeat the complete
-    workload. A patched combined image-sampler variant captures source color;
+    workload. Patched combined image-sampler and separate image/sampler variants
+    capture source color; the separate path executes and verifies exact sampled
+    RGBA through native x86/x64 descriptor sets on NVIDIA. Descriptor arrays remain;
     transfer-source RGBA8/BGRA8 images gain coverage-row uploads and isolated
-    bounded-table replacement. Full ReShade adapter replay, separate source descriptors,
-    forced device loss, AMD/Intel/SwiftShader, and real-game evidence remain.
+    bounded-table replacement. Full ReShade adapter replay, forced device loss,
+    AMD/Intel/SwiftShader, and real-game evidence remain.
 [~] Support indexed, non-indexed, instanced, and indirect draws.
     Evidence: D3D10 handles direct/indexed instanced draws (the API has no general
     indirect draw), and D3D11 handles direct and indirect indexed/non-indexed instanced draws,

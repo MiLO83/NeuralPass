@@ -74,6 +74,11 @@ struct DrawCommand {
     std::uint32_t sampler_register = 0;
     std::uint32_t sampler_space = 0;
     std::uint64_t source_sampler = 0;
+    std::uint64_t sampler_descriptor_table = 0;
+    std::uint32_t sampler_descriptor_param = 0;
+    std::uint32_t sampler_descriptor_binding = 0;
+    std::uint32_t sampler_descriptor_array_offset = 0;
+    std::uint32_t sampler_descriptor_type = 0;
     bool source_sampleable = false;
     void *api_command_list = nullptr;
     std::uint64_t source_resource = 0;

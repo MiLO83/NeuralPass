@@ -37,8 +37,9 @@ compatible texture/sampler pair is bound. Its bounded-table RGBA8/BGRA8
 replacement path is experimental and still needs real-game validation. A new
 Vulkan scaffold instruments a compatible vertex SPIR-V module to carry the real
 UV input into the same surface contract and uses a generic three-slot fence/readback
-ring. Combined image-sampler bindings can provide source color through the
-application's existing descriptor set. Transfer-source RGBA8/BGRA8 images in
+ring. Combined image-sampler bindings and scalar separate image/sampler bindings
+can provide source color through the application's existing descriptor sets.
+Transfer-source RGBA8/BGRA8 images in
 bounded descriptor tables also have an experimental coverage-safe replacement
 path; driver/game validation remains.
 
@@ -301,8 +302,9 @@ D3D12 has experimental PSO replay,
 asynchronous capture, and descriptor-isolated RGBA8/BGRA8 replacement. Vulkan
 has SPIR-V vertex instrumentation, pipeline replay, and asynchronous readback, but
 accepts a draw only when it can safely identify and instrument a plain float2 UV
-input. Both explicit APIs still need real-game evidence; Vulkan also needs
-separate-descriptor source sampling and broader replacement layouts. Unsupported APIs, shader signatures, native
+input. Both explicit APIs still need real-game evidence; Vulkan scalar combined
+and separate-descriptor source sampling now passes native x86/x64 driver tests,
+while descriptor arrays and broader replacement layouts remain. Unsupported APIs, shader signatures, native
 render passes, render-target sizes, and MSAA draws retain the screen-space path
 instead of receiving guessed UV data. The canonical capture and multi-material
 baker remain API-neutral so every adapter emits the same validated surface-frame

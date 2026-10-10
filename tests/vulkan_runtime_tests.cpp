@@ -1,6 +1,7 @@
 #include <vulkan/vulkan.h>
 
 #include "vulkan_capture_shader_spv.hpp"
+#include "vulkan_capture_separate_spv.hpp"
 #include "vulkan_instrument_test_spv.hpp"
 #include "vulkan_spirv.hpp"
 
@@ -79,6 +80,14 @@ struct Vulkan {
     PFN_vkDestroyShaderModule destroy_shader_module = nullptr;
     PFN_vkCreatePipelineLayout create_pipeline_layout = nullptr;
     PFN_vkDestroyPipelineLayout destroy_pipeline_layout = nullptr;
+    PFN_vkCreateDescriptorSetLayout create_descriptor_set_layout = nullptr;
+    PFN_vkDestroyDescriptorSetLayout destroy_descriptor_set_layout = nullptr;
+    PFN_vkCreateDescriptorPool create_descriptor_pool = nullptr;
+    PFN_vkDestroyDescriptorPool destroy_descriptor_pool = nullptr;
+    PFN_vkAllocateDescriptorSets allocate_descriptor_sets = nullptr;
+    PFN_vkUpdateDescriptorSets update_descriptor_sets = nullptr;
+    PFN_vkCreateSampler create_sampler = nullptr;
+    PFN_vkDestroySampler destroy_sampler = nullptr;
     PFN_vkCreateGraphicsPipelines create_graphics_pipelines = nullptr;
     PFN_vkDestroyPipeline destroy_pipeline = nullptr;
     PFN_vkCreateCommandPool create_command_pool = nullptr;
@@ -89,6 +98,7 @@ struct Vulkan {
     PFN_vkCmdBeginRenderPass cmd_begin_render_pass = nullptr;
     PFN_vkCmdEndRenderPass cmd_end_render_pass = nullptr;
     PFN_vkCmdBindPipeline cmd_bind_pipeline = nullptr;
+    PFN_vkCmdBindDescriptorSets cmd_bind_descriptor_sets = nullptr;
     PFN_vkCmdBindVertexBuffers cmd_bind_vertex_buffers = nullptr;
     PFN_vkCmdDraw cmd_draw = nullptr;
     PFN_vkCmdPipelineBarrier cmd_pipeline_barrier = nullptr;
@@ -172,6 +182,14 @@ struct Vulkan {
         NP_LOAD_DEVICE(destroy_shader_module, vkDestroyShaderModule);
         NP_LOAD_DEVICE(create_pipeline_layout, vkCreatePipelineLayout);
         NP_LOAD_DEVICE(destroy_pipeline_layout, vkDestroyPipelineLayout);
+        NP_LOAD_DEVICE(create_descriptor_set_layout, vkCreateDescriptorSetLayout);
+        NP_LOAD_DEVICE(destroy_descriptor_set_layout, vkDestroyDescriptorSetLayout);
+        NP_LOAD_DEVICE(create_descriptor_pool, vkCreateDescriptorPool);
+        NP_LOAD_DEVICE(destroy_descriptor_pool, vkDestroyDescriptorPool);
+        NP_LOAD_DEVICE(allocate_descriptor_sets, vkAllocateDescriptorSets);
+        NP_LOAD_DEVICE(update_descriptor_sets, vkUpdateDescriptorSets);
+        NP_LOAD_DEVICE(create_sampler, vkCreateSampler);
+        NP_LOAD_DEVICE(destroy_sampler, vkDestroySampler);
         NP_LOAD_DEVICE(create_graphics_pipelines, vkCreateGraphicsPipelines);
         NP_LOAD_DEVICE(destroy_pipeline, vkDestroyPipeline);
         NP_LOAD_DEVICE(create_command_pool, vkCreateCommandPool);
@@ -182,6 +200,7 @@ struct Vulkan {
         NP_LOAD_DEVICE(cmd_begin_render_pass, vkCmdBeginRenderPass);
         NP_LOAD_DEVICE(cmd_end_render_pass, vkCmdEndRenderPass);
         NP_LOAD_DEVICE(cmd_bind_pipeline, vkCmdBindPipeline);
+        NP_LOAD_DEVICE(cmd_bind_descriptor_sets, vkCmdBindDescriptorSets);
         NP_LOAD_DEVICE(cmd_bind_vertex_buffers, vkCmdBindVertexBuffers);
         NP_LOAD_DEVICE(cmd_draw, vkCmdDraw);
         NP_LOAD_DEVICE(cmd_pipeline_barrier, vkCmdPipelineBarrier);
@@ -318,7 +337,8 @@ ImageAllocation create_transfer_image(Vulkan &vk, VkDevice device,
     info.arrayLayers = 1;
     info.samples = VK_SAMPLE_COUNT_1_BIT;
     info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                 VK_IMAGE_USAGE_SAMPLED_BIT;
     info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     vk_require(vk.create_image(device, &info, nullptr, &result.image),
@@ -523,20 +543,118 @@ int run() {
     vk_require(vk.create_framebuffer(device, &framebuffer_info, nullptr, &framebuffer),
                "vkCreateFramebuffer failed");
 
+    // A uniform 2x2 source makes the sample independent of filtering and edge
+    // convention while still proving native separate-image/sampler descriptors.
+    auto sampled_source = create_transfer_image(vk, device, memory_properties);
+    VkImageViewCreateInfo sampled_view_info {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    sampled_view_info.image = sampled_source.image;
+    sampled_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    sampled_view_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+    sampled_view_info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VkImageView sampled_view = VK_NULL_HANDLE;
+    vk_require(vk.create_image_view(device, &sampled_view_info, nullptr, &sampled_view),
+               "vkCreateImageView for sampled source failed");
+    VkSamplerCreateInfo sampler_info {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    sampler_info.magFilter = VK_FILTER_NEAREST;
+    sampler_info.minFilter = VK_FILTER_NEAREST;
+    sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.maxLod = 1.0f;
+    VkSampler sampled_sampler = VK_NULL_HANDLE;
+    vk_require(vk.create_sampler(device, &sampler_info, nullptr, &sampled_sampler),
+               "vkCreateSampler for separate descriptor test failed");
+    const std::array<VkDescriptorSetLayoutBinding, 2> descriptor_bindings {{
+        {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+    }};
+    VkDescriptorSetLayoutCreateInfo descriptor_layout_info {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    descriptor_layout_info.bindingCount =
+        static_cast<std::uint32_t>(descriptor_bindings.size());
+    descriptor_layout_info.pBindings = descriptor_bindings.data();
+    VkDescriptorSetLayout descriptor_layout = VK_NULL_HANDLE;
+    vk_require(vk.create_descriptor_set_layout(device, &descriptor_layout_info, nullptr,
+                                                &descriptor_layout),
+               "vkCreateDescriptorSetLayout for separate descriptors failed");
+    const std::array<VkDescriptorPoolSize, 2> descriptor_pool_sizes {{
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1}, {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
+    }};
+    VkDescriptorPoolCreateInfo descriptor_pool_info {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    descriptor_pool_info.maxSets = 1;
+    descriptor_pool_info.poolSizeCount =
+        static_cast<std::uint32_t>(descriptor_pool_sizes.size());
+    descriptor_pool_info.pPoolSizes = descriptor_pool_sizes.data();
+    VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+    vk_require(vk.create_descriptor_pool(device, &descriptor_pool_info, nullptr,
+                                          &descriptor_pool),
+               "vkCreateDescriptorPool for separate descriptors failed");
+    VkDescriptorSetAllocateInfo descriptor_allocate_info {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    descriptor_allocate_info.descriptorPool = descriptor_pool;
+    descriptor_allocate_info.descriptorSetCount = 1;
+    descriptor_allocate_info.pSetLayouts = &descriptor_layout;
+    VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+    vk_require(vk.allocate_descriptor_sets(device, &descriptor_allocate_info,
+                                            &descriptor_set),
+               "vkAllocateDescriptorSets for separate descriptors failed");
+    VkDescriptorImageInfo sampled_image_info {};
+    sampled_image_info.imageView = sampled_view;
+    sampled_image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkDescriptorImageInfo sampled_sampler_info {};
+    sampled_sampler_info.sampler = sampled_sampler;
+    std::array<VkWriteDescriptorSet, 2> descriptor_writes {};
+    descriptor_writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    descriptor_writes[0].dstSet = descriptor_set;
+    descriptor_writes[0].dstBinding = 0;
+    descriptor_writes[0].descriptorCount = 1;
+    descriptor_writes[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    descriptor_writes[0].pImageInfo = &sampled_image_info;
+    descriptor_writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    descriptor_writes[1].dstSet = descriptor_set;
+    descriptor_writes[1].dstBinding = 1;
+    descriptor_writes[1].descriptorCount = 1;
+    descriptor_writes[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+    descriptor_writes[1].pImageInfo = &sampled_sampler_info;
+    vk.update_descriptor_sets(device,
+        static_cast<std::uint32_t>(descriptor_writes.size()),
+        descriptor_writes.data(), 0, nullptr);
+    constexpr std::array<std::uint8_t, 4> sampled_rgba {64, 128, 192, 255};
+    std::array<std::uint8_t, 16> sampled_texels {};
+    for (std::size_t offset = 0; offset < sampled_texels.size(); offset += 4)
+        std::copy(sampled_rgba.begin(), sampled_rgba.end(),
+                  sampled_texels.begin() + offset);
+    auto sampled_upload = create_buffer(vk, device, memory_properties,
+        sampled_texels.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+    write_buffer(vk, device, sampled_upload, sampled_texels.data(), sampled_texels.size());
+
     auto vertex_words = shader_words(neuralpass_vulkan_instrument_test_spv,
                                      sizeof(neuralpass_vulkan_instrument_test_spv));
     auto instrumented = neuralpass::vulkan_capture::spirv::instrument_vertex_uv(
         vertex_words, 2, "main");
     require(static_cast<bool>(instrumented), "runtime vertex instrumentation failed");
-    auto fragment_words = shader_words(neuralpass_vulkan_capture_spv,
-                                       sizeof(neuralpass_vulkan_capture_spv));
+    auto fragment_words = shader_words(neuralpass_vulkan_capture_separate_spv,
+                                       sizeof(neuralpass_vulkan_capture_separate_spv));
     fragment_words = neuralpass::vulkan_capture::spirv::patch_unique_location(
         fragment_words, 31, instrumented.varying_location);
     require(!fragment_words.empty(), "runtime fragment varying patch failed");
+    fragment_words = neuralpass::vulkan_capture::spirv::patch_unique_decoration(
+        fragment_words, 34, 30, 0);
+    fragment_words = neuralpass::vulkan_capture::spirv::patch_unique_decoration(
+        fragment_words, 33, 30, 0);
+    fragment_words = neuralpass::vulkan_capture::spirv::patch_unique_decoration(
+        fragment_words, 34, 29, 0);
+    fragment_words = neuralpass::vulkan_capture::spirv::patch_unique_decoration(
+        fragment_words, 33, 29, 1);
+    require(!fragment_words.empty(), "runtime separate descriptor patch failed");
     const auto vertex_shader = shader_module(vk, device, instrumented.words);
     const auto fragment_shader = shader_module(vk, device, fragment_words);
 
     VkPipelineLayoutCreateInfo layout_info {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layout_info.setLayoutCount = 1;
+    layout_info.pSetLayouts = &descriptor_layout;
     VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
     vk_require(vk.create_pipeline_layout(device, &layout_info, nullptr, &pipeline_layout),
                "vkCreatePipelineLayout failed");
@@ -680,6 +798,34 @@ int run() {
                "vkAllocateCommandBuffers failed");
     VkCommandBufferBeginInfo begin_info {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     vk_require(vk.begin_command_buffer(commands, &begin_info), "vkBeginCommandBuffer failed");
+    VkImageMemoryBarrier sampled_upload_barrier {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    sampled_upload_barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    sampled_upload_barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    sampled_upload_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    sampled_upload_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    sampled_upload_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    sampled_upload_barrier.image = sampled_source.image;
+    sampled_upload_barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vk.cmd_pipeline_barrier(commands, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
+        1, &sampled_upload_barrier);
+    VkBufferImageCopy sampled_copy {};
+    sampled_copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    sampled_copy.imageExtent = {2, 2, 1};
+    vk.cmd_copy_buffer_to_image(commands, sampled_upload.buffer,
+        sampled_source.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &sampled_copy);
+    VkImageMemoryBarrier sampled_read_barrier {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    sampled_read_barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    sampled_read_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    sampled_read_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    sampled_read_barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    sampled_read_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    sampled_read_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    sampled_read_barrier.image = sampled_source.image;
+    sampled_read_barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vk.cmd_pipeline_barrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
+        1, &sampled_read_barrier);
     std::array<VkClearValue, 4> clear_values {};
     VkRenderPassBeginInfo render_begin {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     render_begin.renderPass = render_pass;
@@ -689,6 +835,8 @@ int run() {
     render_begin.pClearValues = clear_values.data();
     vk.cmd_begin_render_pass(commands, &render_begin, VK_SUBPASS_CONTENTS_INLINE);
     vk.cmd_bind_pipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vk.cmd_bind_descriptor_sets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
     const VkDeviceSize vertex_offset = 0;
     vk.cmd_bind_vertex_buffers(commands, 0, 1, &vertex_buffer, &vertex_offset);
     vk.cmd_draw(commands, 3, 1, 0, 0);
@@ -824,7 +972,13 @@ int run() {
             gradient[0] > 0.0f && gradient[3] > 0.0f,
             "native Vulkan capture returned invalid UV gradients");
     const auto *source = reinterpret_cast<const float *>(output[2].data()) + pixel * 4;
-    require(std::isnan(source[0]), "descriptor-free Vulkan capture did not mark source unknown");
+    require(std::isfinite(source[0]) && std::isfinite(source[1]) &&
+            std::isfinite(source[2]) && std::isfinite(source[3]) &&
+            std::abs(source[0] - sampled_rgba[0] / 255.0f) < 0.01f &&
+            std::abs(source[1] - sampled_rgba[1] / 255.0f) < 0.01f &&
+            std::abs(source[2] - sampled_rgba[2] / 255.0f) < 0.01f &&
+            std::abs(source[3] - 1.0f) < 0.01f,
+            "native Vulkan separate image/sampler capture returned the wrong source color");
     const auto *depth = reinterpret_cast<const float *>(output[3].data()) + pixel;
     require(std::isfinite(*depth) && std::abs(*depth - 0.25f) < 0.01f,
             "native Vulkan capture returned the wrong fragment depth");
@@ -846,6 +1000,8 @@ int run() {
     vk.destroy_command_pool(device, pool, nullptr);
     vk.destroy_buffer(device, vertex_buffer, nullptr);
     vk.free_memory(device, vertex_memory.memory, nullptr);
+    vk.destroy_buffer(device, sampled_upload.buffer, nullptr);
+    vk.free_memory(device, sampled_upload.allocation.memory, nullptr);
     for (const auto *buffer : {&isolation_upload, &isolation_patch,
                               &isolation_source_readback,
                               &isolation_replacement_readback}) {
@@ -858,6 +1014,12 @@ int run() {
     }
     vk.destroy_pipeline(device, pipeline, nullptr);
     vk.destroy_pipeline_layout(device, pipeline_layout, nullptr);
+    vk.destroy_descriptor_pool(device, descriptor_pool, nullptr);
+    vk.destroy_descriptor_set_layout(device, descriptor_layout, nullptr);
+    vk.destroy_sampler(device, sampled_sampler, nullptr);
+    vk.destroy_image_view(device, sampled_view, nullptr);
+    vk.destroy_image(device, sampled_source.image, nullptr);
+    vk.free_memory(device, sampled_source.allocation.memory, nullptr);
     vk.destroy_shader_module(device, fragment_shader, nullptr);
     vk.destroy_shader_module(device, vertex_shader, nullptr);
     vk.destroy_framebuffer(device, framebuffer, nullptr);
@@ -875,8 +1037,8 @@ int run() {
     run_device_cycle();
     run_device_cycle();
     vk.destroy_instance(instance, nullptr);
-    std::cout << "Native Vulkan instrumented capture, replacement isolation, and "
-                 "device recreation passed on " << physical_properties.deviceName << '\n';
+    std::cout << "Native Vulkan separate-descriptor capture, replacement isolation, "
+                 "and device recreation passed on " << physical_properties.deviceName << '\n';
     return 0;
 }
 

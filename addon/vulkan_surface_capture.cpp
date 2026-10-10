@@ -1,5 +1,6 @@
 #include "vulkan_surface_capture.hpp"
 #include "vulkan_capture_combined_spv.hpp"
+#include "vulkan_capture_separate_spv.hpp"
 #include "vulkan_capture_shader_spv.hpp"
 #include "vulkan_spirv.hpp"
 
@@ -13,6 +14,8 @@
 
 namespace neuralpass::vulkan_capture {
 namespace {
+
+enum class SourceSampling : std::uint8_t { none, combined, separate };
 
 struct ShaderBlob {
     std::vector<std::uint8_t> code;
@@ -49,7 +52,9 @@ struct PipelineKey {
     std::uint32_t uv_location = 0;
     std::uint32_t source_set = 0;
     std::uint32_t source_binding = 0;
-    bool samples_source = false;
+    std::uint32_t sampler_set = 0;
+    std::uint32_t sampler_binding = 0;
+    SourceSampling source_sampling = SourceSampling::none;
     bool operator==(const PipelineKey &) const = default;
 };
 struct PipelineKeyHash {
@@ -63,7 +68,11 @@ struct PipelineKeyHash {
             (value << 6) + (value >> 2);
         value ^= std::hash<std::uint32_t> {}(key.source_binding) + 0x9e3779b9u +
             (value << 6) + (value >> 2);
-        value ^= std::hash<bool> {}(key.samples_source) + 0x9e3779b9u +
+        value ^= std::hash<std::uint32_t> {}(key.sampler_set) + 0x9e3779b9u +
+            (value << 6) + (value >> 2);
+        value ^= std::hash<std::uint32_t> {}(key.sampler_binding) + 0x9e3779b9u +
+            (value << 6) + (value >> 2);
+        value ^= std::hash<SourceSampling> {}(key.source_sampling) + 0x9e3779b9u +
             (value << 6) + (value >> 2);
         return value;
     }
@@ -114,25 +123,41 @@ void store_shader(ShaderBlob &destination, const reshade::api::shader_desc &sour
 
 std::vector<std::uint32_t> capture_spirv(
     std::uint32_t uv_location, const capture::DrawCommand &draw,
-    bool samples_source) {
-    const auto *bytes = samples_source
-        ? neuralpass_vulkan_capture_combined_spv
-        : neuralpass_vulkan_capture_spv;
-    const auto byte_count = samples_source
-        ? sizeof(neuralpass_vulkan_capture_combined_spv)
-        : sizeof(neuralpass_vulkan_capture_spv);
+    SourceSampling sampling) {
+    const unsigned char *bytes = neuralpass_vulkan_capture_spv;
+    std::size_t byte_count = sizeof(neuralpass_vulkan_capture_spv);
+    if (sampling == SourceSampling::combined) {
+        bytes = neuralpass_vulkan_capture_combined_spv;
+        byte_count = sizeof(neuralpass_vulkan_capture_combined_spv);
+    } else if (sampling == SourceSampling::separate) {
+        bytes = neuralpass_vulkan_capture_separate_spv;
+        byte_count = sizeof(neuralpass_vulkan_capture_separate_spv);
+    }
     if (byte_count % sizeof(std::uint32_t) != 0) return {};
     std::vector<std::uint32_t> words(byte_count / sizeof(std::uint32_t));
     std::memcpy(words.data(), bytes, byte_count);
     words = spirv::patch_unique_location(words, 31, uv_location);
-    if (words.empty() || !samples_source) return words;
+    if (words.empty() || sampling == SourceSampling::none) return words;
     constexpr std::uint32_t k_binding_decoration = 33;
     constexpr std::uint32_t k_descriptor_set_decoration = 34;
+    if (sampling == SourceSampling::combined) {
+        words = spirv::patch_unique_decoration(
+            words, k_descriptor_set_decoration, 31, draw.source_descriptor_param);
+        if (words.empty()) return {};
+        return spirv::patch_unique_decoration(
+            words, k_binding_decoration, 31, draw.source_descriptor_binding);
+    }
     words = spirv::patch_unique_decoration(
-        words, k_descriptor_set_decoration, 31, draw.source_descriptor_param);
+        words, k_descriptor_set_decoration, 30, draw.source_descriptor_param);
+    if (words.empty()) return {};
+    words = spirv::patch_unique_decoration(
+        words, k_binding_decoration, 30, draw.source_descriptor_binding);
+    if (words.empty()) return {};
+    words = spirv::patch_unique_decoration(
+        words, k_descriptor_set_decoration, 29, draw.sampler_descriptor_param);
     if (words.empty()) return {};
     return spirv::patch_unique_decoration(
-        words, k_binding_decoration, 31, draw.source_descriptor_binding);
+        words, k_binding_decoration, 29, draw.sampler_descriptor_binding);
 }
 
 } // namespace
@@ -307,12 +332,22 @@ struct SurfaceCapture::Impl {
                                             std::uint64_t material,
                                             std::uint32_t location,
                                             const capture::DrawCommand &draw) {
-        const bool wants_source = draw.source_sampleable &&
-            draw.source_descriptor_array_offset == 0 &&
-            static_cast<reshade::api::descriptor_type>(draw.source_descriptor_type) ==
-                reshade::api::descriptor_type::sampler_with_resource_view;
+        SourceSampling sampling = SourceSampling::none;
+        const auto source_type =
+            static_cast<reshade::api::descriptor_type>(draw.source_descriptor_type);
+        const auto sampler_type =
+            static_cast<reshade::api::descriptor_type>(draw.sampler_descriptor_type);
+        if (draw.source_sampleable && draw.source_descriptor_array_offset == 0) {
+            if (source_type == reshade::api::descriptor_type::sampler_with_resource_view)
+                sampling = SourceSampling::combined;
+            else if (source_type == reshade::api::descriptor_type::shader_resource_view &&
+                     sampler_type == reshade::api::descriptor_type::sampler &&
+                     draw.sampler_descriptor_array_offset == 0)
+                sampling = SourceSampling::separate;
+        }
         const PipelineKey key {source_pipeline, material, location,
-            draw.source_descriptor_param, draw.source_descriptor_binding, wants_source};
+            draw.source_descriptor_param, draw.source_descriptor_binding,
+            draw.sampler_descriptor_param, draw.sampler_descriptor_binding, sampling};
         if (const auto found = variants.find(key); found != variants.end()) return found->second;
         const auto known = pipelines.find(source_pipeline);
         if (known == pipelines.end() || device == nullptr || !known->second.has_vertex) return {};
@@ -332,7 +367,7 @@ struct SurfaceCapture::Impl {
             vertex_words, location, source.vertex.entry);
         if (!instrumented_vertex) return {};
         auto spirv = capture_spirv(
-            instrumented_vertex.varying_location, draw, wants_source);
+            instrumented_vertex.varying_location, draw, sampling);
         if (spirv.empty()) return {};
         const std::array<std::uint32_t, 2> ids {0, 1};
         const std::array<std::uint32_t, 2> values {

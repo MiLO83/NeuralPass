@@ -13,7 +13,7 @@ full add-on build of ReShade. It is not suitable for protected multiplayer games
 | D3D10 | Experimental direct/indexed geometry capture and RGBA8/BGRA8 replacement; fresh-device WARP recreation passes |
 | D3D11 | Experimental geometry capture and RGBA8/BGRA8 replacement; fresh-device WARP recreation passes |
 | D3D12 | Experimental PSO replay, source sampling, bounded-table RGBA8/BGRA8 replacement, barriers, and fence/readback ring; fresh-device WARP recreation passes, real-game evidence pending |
-| Vulkan | Experimental SPIR-V UV/source capture and transfer-source RGBA8/BGRA8 bounded-table replacement; x86/x64 native capture, replacement isolation, and logical-device recreation pass on NVIDIA, but ReShade/game evidence remains |
+| Vulkan | Experimental SPIR-V UV/source capture with scalar combined or separate image/sampler descriptors and transfer-source RGBA8/BGRA8 bounded-table replacement; x86/x64 native capture, replacement isolation, and logical-device recreation pass on NVIDIA, but ReShade/game evidence remains |
 | SDR RGBA8 | Supported preview path |
 | HDR / scRGB | Experimental FP16 scRGB and RGB10A2 HDR10/PQ paths with declared-color-space validation and luminance-preserving composition; monitor/game validation pending |
 | DirectML | Game-device DXGI adapter is selected by LUID; model execution smoke-tested on NVIDIA; packaged evidence test supports explicit adapter indices; AMD and Intel evidence remains |

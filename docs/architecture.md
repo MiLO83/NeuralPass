@@ -283,12 +283,13 @@ locations are rejected instead of receiving guessed UV data. Material identity
 is supplied through specialization constants, while the application's original
 vertex specialization constants are retained.
 
-When the selected base-color candidate is a non-array combined image sampler,
-a second embedded fragment variant patches its descriptor-set and binding
-decorations to the application's existing layout. It samples with the captured
-UV derivatives and rejects fully transparent texels. Separate image/sampler
-descriptors and descriptor arrays currently emit NaN source color and remain
-outside source-transfer baking.
+When the selected base-color candidate is scalar, embedded combined-sampler and
+separate-image/sampler fragment variants patch their descriptor-set and binding
+decorations to the application's existing layout. They sample with the captured
+UV derivatives and reject fully transparent texels. The separate variant keeps
+the image and sampler locations independent instead of inferring a relationship
+between their bindings. Descriptor arrays currently emit NaN source color and
+remain outside source-transfer baking.
 
 Replacement is deliberately narrower than capture. For a non-array RGBA8/BGRA8
 source created with transfer-source usage and held in a bounded descriptor table

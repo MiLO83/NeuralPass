@@ -228,6 +228,11 @@ struct BakerPixelSampler {
     reshade::api::sampler sampler = {};
     std::uint32_t dx_register_index = 0;
     std::uint32_t dx_register_space = 0;
+    reshade::api::descriptor_table table = {};
+    std::uint32_t param = 0;
+    std::uint32_t binding = 0;
+    std::uint32_t array_offset = 0;
+    reshade::api::descriptor_type type = reshade::api::descriptor_type::sampler;
 };
 
 struct BakerDescriptorTable {
@@ -635,9 +640,16 @@ void track_pixel_descriptor(BakerCommandState &state, std::uint64_t slot,
 void track_pixel_sampler(BakerCommandState &state, std::uint64_t slot,
                          reshade::api::sampler sampler,
                          std::uint32_t dx_register_index,
-                         std::uint32_t dx_register_space) {
+                         std::uint32_t dx_register_space,
+                         reshade::api::descriptor_table table = {},
+                         std::uint32_t param = 0,
+                         std::uint32_t binding = 0,
+                         std::uint32_t array_offset = 0,
+                         reshade::api::descriptor_type type =
+                             reshade::api::descriptor_type::sampler) {
     if (sampler == 0) state.pixel_samplers.erase(slot);
-    else state.pixel_samplers[slot] = {sampler, dx_register_index, dx_register_space};
+    else state.pixel_samplers[slot] = {sampler, dx_register_index, dx_register_space,
+        table, param, binding, array_offset, type};
 }
 
 void on_baker_push_descriptors(reshade::api::command_list *command_list,
@@ -659,19 +671,23 @@ void on_baker_push_descriptors(reshade::api::command_list *command_list,
             view = pair.view;
             track_pixel_sampler(*state,
                 descriptor_slot(layout, param, update.binding, update.array_offset + index),
-                pair.sampler, update.binding + index, 0);
+                pair.sampler, update.binding + index, 0, {}, param, update.binding,
+                update.array_offset + index, update.type);
         }
         else if (update.type == reshade::api::descriptor_type::sampler) {
             const auto sampler = static_cast<const reshade::api::sampler *>(
                 update.descriptors)[index];
             track_pixel_sampler(*state,
                 descriptor_slot(layout, param, update.binding, update.array_offset + index),
-                sampler, update.binding + index, 0);
+                sampler, update.binding + index, 0, {}, param, update.binding,
+                update.array_offset + index, update.type);
             continue;
         } else
             continue;
         track_pixel_descriptor(*state,
-            descriptor_slot(layout, param, update.binding, update.array_offset + index), view);
+            descriptor_slot(layout, param, update.binding, update.array_offset + index),
+            view, update.binding + index, 0, {}, param, update.binding,
+            update.array_offset + index, update.type);
     }
 }
 
@@ -718,7 +734,9 @@ void on_baker_bind_descriptor_tables(reshade::api::command_list *command_list,
                         range.type == reshade::api::descriptor_type::sampler_with_resource_view)
                         track_pixel_sampler(*state, slot,
                             tracking->get_sampler(heap, base_offset + element),
-                            range.dx_register_index + element, range.dx_register_space);
+                            range.dx_register_index + element, range.dx_register_space,
+                            tables[table_index], first + table_index, binding,
+                            array_offset, range.type);
                 }
             }
         }
@@ -1078,6 +1096,11 @@ void configure_explicit_draw_state(reshade::api::command_list *command_list,
             draw.sampler_register = best_sampler->dx_register_index;
             draw.sampler_space = best_sampler->dx_register_space;
             draw.source_sampler = best_sampler->sampler.handle;
+            draw.sampler_descriptor_table = best_sampler->table.handle;
+            draw.sampler_descriptor_param = best_sampler->param;
+            draw.sampler_descriptor_binding = best_sampler->binding;
+            draw.sampler_descriptor_array_offset = best_sampler->array_offset;
+            draw.sampler_descriptor_type = static_cast<std::uint32_t>(best_sampler->type);
             draw.source_sampleable = true;
         }
         const auto bound_table = state.descriptor_tables.find(best_source->param);

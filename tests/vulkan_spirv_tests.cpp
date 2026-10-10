@@ -1,5 +1,6 @@
 #include "vulkan_capture_shader_spv.hpp"
 #include "vulkan_capture_combined_spv.hpp"
+#include "vulkan_capture_separate_spv.hpp"
 #include "vulkan_instrument_test_spv.hpp"
 #include "vulkan_spirv.hpp"
 
@@ -84,6 +85,30 @@ void test_combined_sampler_patch() {
             "combined source descriptor patch changed another decoration");
 }
 
+void test_separate_image_sampler_patch() {
+    auto words = shader_words(neuralpass_vulkan_capture_separate_spv,
+                              sizeof(neuralpass_vulkan_capture_separate_spv));
+    require(decoration_count(words, 34, 30) == 1 &&
+            decoration_count(words, 33, 30) == 1 &&
+            decoration_count(words, 34, 29) == 1 &&
+            decoration_count(words, 33, 29) == 1,
+            "separate source shader descriptor sentinels are not unique");
+    words = neuralpass::vulkan_capture::spirv::patch_unique_decoration(
+        words, 34, 30, 2);
+    words = neuralpass::vulkan_capture::spirv::patch_unique_decoration(
+        words, 33, 30, 5);
+    words = neuralpass::vulkan_capture::spirv::patch_unique_decoration(
+        words, 34, 29, 4);
+    words = neuralpass::vulkan_capture::spirv::patch_unique_decoration(
+        words, 33, 29, 7);
+    require(!words.empty() && decoration_count(words, 34, 2) == 1 &&
+            decoration_count(words, 33, 5) == 1 &&
+            decoration_count(words, 34, 4) == 1 &&
+            decoration_count(words, 33, 7) == 1 &&
+            location_count(words, 31) == 1,
+            "separate image/sampler patch changed the wrong decorations");
+}
+
 void test_vertex_uv_instrumentation() {
     const auto original = shader_words(neuralpass_vulkan_instrument_test_spv,
                                        sizeof(neuralpass_vulkan_instrument_test_spv));
@@ -143,6 +168,7 @@ int main() {
     try {
         test_capture_location_patch();
         test_combined_sampler_patch();
+        test_separate_image_sampler_patch();
         test_float2_output_detection();
         test_vertex_uv_instrumentation();
         std::cout << "Vulkan SPIR-V tests passed\n";
