@@ -90,8 +90,10 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [~] Production D3D9 x86/x64 capture and replacement.
     Evidence: x86/x64 Shader Model 3 token parsing, direct/indexed replay,
     four-plane capture, full state-block restoration, and same-source lockable
-    texture replacement isolation pass a native D3D9 HAL test. Synchronous readback,
-    missing fragment depth, device loss, broad hardware/games, and soak remain.
+    texture replacement isolation pass a native D3D9 HAL test. The test also tears
+    capture down around a real IDirect3DDevice9::Reset, recreates it, and proves
+    replacement replay plus fresh readback afterward. Synchronous readback, missing
+    fragment depth, forced device loss, broad hardware/games, and soak remain.
 [~] Production D3D10 x86/x64 capture and replacement.
     Evidence: experimental x86/x64 Shader Model 4 direct/indexed replay, four-plane
     asynchronous capture, complete touched-state restoration, coverage-safe
@@ -257,9 +259,11 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     D3D12 companion PSOs and Vulkan SwiftShader remain; broader D3D9 hardware remains.
 [~] Resize, device-loss, corrupt-cache, and worker-restart tests pass.
     Evidence: swapchain resize teardown releases adapter resources before reset;
-    native D3D9/10/11/12 tests recreate capture at new dimensions without stale
-    readback, cache corruption is isolated, and native x64 plus x86-to-x64 tests
-    recover from forced worker death. Forced GPU removal and Vulkan runtime coverage remain.
+    the native D3D9 test performs an actual device Reset and proves replacement and
+    capture after recreation, while D3D10/11/12 tests recreate capture at new
+    dimensions without stale readback. Cache corruption is isolated, and native x64
+    plus x86-to-x64 tests recover from forced worker death. Forced GPU removal and
+    Vulkan device-recreation coverage remain.
 [ ] Steel Nomad D3D12 stress validation passes.
 [ ] Each API completes a 60-minute soak without crash or device removal.
 [ ] Clean-machine install, update, removal, and signature verification pass.

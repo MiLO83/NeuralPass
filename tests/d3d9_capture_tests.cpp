@@ -53,9 +53,7 @@ HWND make_window() {
         0, 0, 16, 16, nullptr, nullptr, window_class.hInstance, nullptr);
 }
 
-IDirect3DDevice9 *make_device(HWND window, IDirect3D9 **direct3d_out) {
-    auto *direct3d = Direct3DCreate9(D3D_SDK_VERSION);
-    require(direct3d != nullptr, "Direct3DCreate9 failed");
+D3DPRESENT_PARAMETERS presentation(HWND window) {
     D3DPRESENT_PARAMETERS present {};
     present.BackBufferWidth = present.BackBufferHeight = 8;
     present.BackBufferFormat = D3DFMT_A8R8G8B8;
@@ -65,6 +63,13 @@ IDirect3DDevice9 *make_device(HWND window, IDirect3D9 **direct3d_out) {
     present.hDeviceWindow = window;
     present.Windowed = TRUE;
     present.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+    return present;
+}
+
+IDirect3DDevice9 *make_device(HWND window, IDirect3D9 **direct3d_out) {
+    auto *direct3d = Direct3DCreate9(D3D_SDK_VERSION);
+    require(direct3d != nullptr, "Direct3DCreate9 failed");
+    auto present = presentation(window);
     IDirect3DDevice9 *device = nullptr;
     const std::array<D3DDEVTYPE, 2> types {D3DDEVTYPE_HAL, D3DDEVTYPE_REF};
     for (const auto type : types) {
@@ -115,6 +120,21 @@ void fill_texture(IDirect3DTexture9 *texture, std::array<std::uint8_t, 4> rgba) 
         }
     }
     texture->UnlockRect(0);
+}
+
+neuralpass::capture::ReplacementMip replacement(
+        std::uint8_t red, std::uint8_t green, std::uint8_t blue) {
+    neuralpass::capture::ReplacementMip result;
+    result.width = result.height = 4;
+    result.rgba.resize(4 * 4 * 4);
+    result.coverage.resize(4 * 4, 2);
+    for (std::size_t index = 0; index < result.rgba.size(); index += 4) {
+        result.rgba[index] = red;
+        result.rgba[index + 1] = green;
+        result.rgba[index + 2] = blue;
+        result.rgba[index + 3] = 191;
+    }
+    return result;
 }
 
 void test_d3d9_geometry_capture() {
@@ -213,25 +233,9 @@ void test_d3d9_geometry_capture() {
         !capabilities.asynchronous_readback,
         "D3D9 backend reported inaccurate capabilities");
     constexpr std::uint64_t material = 0xfedcba9876543210ull;
-    neuralpass::capture::ReplacementMip replacement;
-    replacement.width = replacement.height = 4;
-    replacement.rgba.resize(4 * 4 * 4);
-    replacement.coverage.resize(4 * 4, 2);
-    for (std::size_t index = 0; index < replacement.rgba.size(); index += 4) {
-        replacement.rgba[index] = 200; replacement.rgba[index + 1] = 10;
-        replacement.rgba[index + 2] = 20; replacement.rgba[index + 3] = 191;
-    }
-    capture.queue_replacement(material, {std::move(replacement)});
+    capture.queue_replacement(material, {replacement(200, 10, 20)});
     constexpr std::uint64_t second_material = 0x0badf00d12344321ull;
-    neuralpass::capture::ReplacementMip second_replacement;
-    second_replacement.width = second_replacement.height = 4;
-    second_replacement.rgba.resize(4 * 4 * 4);
-    second_replacement.coverage.resize(4 * 4, 2);
-    for (std::size_t index = 0; index < second_replacement.rgba.size(); index += 4) {
-        second_replacement.rgba[index] = 12; second_replacement.rgba[index + 1] = 210;
-        second_replacement.rgba[index + 2] = 30; second_replacement.rgba[index + 3] = 191;
-    }
-    capture.queue_replacement(second_material, {std::move(second_replacement)});
+    capture.queue_replacement(second_material, {replacement(12, 210, 30)});
     neuralpass::capture::DrawCommand draw;
     draw.kind = neuralpass::capture::DrawKind::indexed;
     draw.vertex_or_index_count = 3;
@@ -309,10 +313,51 @@ void test_d3d9_geometry_capture() {
     std::cout << "D3D9 test device: "
               << (device_caps.DeviceType == D3DDEVTYPE_HAL ? "HAL" : "reference") << '\n';
 
-    require(capture.initialize(device, 5, 3) && capture.width() == 5 && capture.height() == 3,
-        "D3D9 capture resources did not survive reset-style reinitialization");
+    // ReShade emits destroy_swapchain(resize=true) before IDirect3DDevice9::Reset.
+    // Mirror that exact lifecycle: release every NeuralPass default-pool object,
+    // reset the real device, then rebuild and prove replay/readback still works.
+    capture.reset();
+    release(backbuffer);
+    auto reset_present = presentation(window);
+    require(SUCCEEDED(device->Reset(&reset_present)),
+        "D3D9 device reset failed after capture teardown");
+    require(SUCCEEDED(device->GetRenderTarget(0, &backbuffer)) && backbuffer != nullptr,
+        "D3D9 reset did not recreate its backbuffer");
+    device->SetVertexDeclaration(declaration);
+    device->SetStreamSource(0, vertex_buffer, 0, sizeof(Vertex));
+    device->SetIndices(index_buffer);
+    device->SetVertexShader(vertex_shader);
+    device->SetPixelShader(pixel_shader);
+    device->SetTexture(5, source_texture);
+    device->SetSamplerState(5, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+    device->SetSamplerState(5, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+    device->SetSamplerState(5, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+    device->SetRenderState(D3DRS_ZENABLE, FALSE);
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    device->SetViewport(&viewport);
+    require(capture.initialize(device, 8, 8) && capture.width() == 8 && capture.height() == 8,
+        "D3D9 capture resources did not recreate after device reset");
     require(!capture.finish_frame().has_value(),
-        "D3D9 reinitialization retained stale readback state");
+        "D3D9 reset recreation retained stale readback state");
+    capture.queue_replacement(material, {replacement(80, 90, 220)});
+    require(SUCCEEDED(device->BeginScene()), "could not begin post-reset D3D9 scene");
+    require(capture.replay(device, uv, material, draw, 5),
+        "D3D9 replay failed after device reset");
+    require(SUCCEEDED(device->EndScene()), "could not end post-reset D3D9 scene");
+    const auto post_reset_pixel = read_pixel(device, backbuffer, 4, 5);
+    require(std::abs(static_cast<int>(post_reset_pixel[0]) - 80) <= 2 &&
+        std::abs(static_cast<int>(post_reset_pixel[1]) - 90) <= 2 &&
+        std::abs(static_cast<int>(post_reset_pixel[2]) - 220) <= 2,
+        "D3D9 post-reset draw did not receive its rebuilt replacement");
+    device->Present(nullptr, nullptr, nullptr, nullptr);
+    std::optional<neuralpass::SurfaceCaptureFrame> post_reset_capture;
+    for (int attempt = 0; attempt < 100 && !post_reset_capture; ++attempt) {
+        post_reset_capture = capture.finish_frame();
+        if (!post_reset_capture) device->Present(nullptr, nullptr, nullptr, nullptr);
+    }
+    require(post_reset_capture.has_value() &&
+        post_reset_capture->pixels().at(4, 5).material_id == material,
+        "D3D9 capture did not produce a valid frame after device reset");
     capture.reset();
     release(backbuffer); release(source_texture); release(index_buffer);
     release(vertex_buffer); release(declaration); release(pixel_shader);

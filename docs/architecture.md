@@ -142,9 +142,11 @@ system-memory transfer is synchronous.
 Swapchain teardown with the resize flag releases D3D9 capture resources before
 `IDirect3DDevice9::Reset`, as required for default-pool objects. Modern adapters
 retain their API attachment and atomically recreate size-dependent surfaces when
-the next effect frame observes new backbuffer dimensions. Native D3D9/10/11/12
-tests exercise reset-style reinitialization and verify that stale readback is not
-returned.
+the next effect frame observes new backbuffer dimensions. The native D3D9 test
+performs a real device `Reset`, recreates capture, and verifies both replacement
+replay and fresh readback afterward. Native D3D10/11/12 tests exercise resize-style
+reinitialization and verify that stale readback is not returned. Forced device
+removal and Vulkan device recreation remain separate production gates.
 
 The canonical planes map naturally to every target API: a two-component
 unsigned target for the 64-bit stable material ID, a two-component float target
