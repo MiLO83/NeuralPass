@@ -65,7 +65,8 @@ $entries = @(
     @{ Source = 'Uninstall-NeuralPass.ps1'; Destination = 'Uninstall-NeuralPass.ps1' },
     @{ Source = 'Diagnose-NeuralPass.ps1'; Destination = 'Diagnose-NeuralPass.ps1' }
 )
-foreach ($optional in @('onnxruntime.dll', 'onnxruntime_providers_shared.dll', 'DirectML.dll')) {
+foreach ($optional in @('onnxruntime.dll', 'onnxruntime_providers_shared.dll', 'DirectML.dll',
+                         'NeuralPassWorker.exe')) {
     if (Test-Path -LiteralPath (Join-Path $package $optional)) {
         $entries += @{ Source = $optional; Destination = $optional }
     }

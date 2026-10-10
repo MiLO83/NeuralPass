@@ -1557,6 +1557,17 @@ void process_frames(RuntimeState *state, std::stop_token token) {
     auto load_backend = [state](int preset_index) -> std::unique_ptr<neuralpass::InferenceBackend> {
         const std::string preset = k_presets.at(static_cast<std::size_t>(preset_index));
         const auto model = g_addon_directory / "models" / "downloads" / (preset + "-9.onnx");
+#if defined(_WIN32) && !defined(_WIN64)
+        try {
+            const auto worker = g_addon_directory / "NeuralPassWorker.exe";
+            if (std::filesystem::exists(model) && std::filesystem::exists(worker))
+                return neuralpass::make_worker_backend(
+                    worker.string(), model.string(), state->directml_enabled,
+                    state->directml_device_id);
+        } catch (const std::exception &error) {
+            reshade::log::message(reshade::log::level::error, error.what());
+        }
+#endif
 #ifdef NEURALPASS_HAS_ONNXRUNTIME
         try {
             if (std::filesystem::exists(model))
@@ -1796,6 +1807,21 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             {.tile_size=256, .halo=32, .dilation_radius=4,
              .tile_budget=state->tile_budget.load(),
              .refresh_age=static_cast<std::uint16_t>(state->refresh_age.load())});
+
+        // The cross-architecture worker echoes all four identity dimensions.
+        // A mismatched response can never be committed as a plausible tile.
+        std::vector<std::uint64_t> visible_bindings;
+        visible_bindings.reserve(correspondence.size());
+        for (const auto &sample : correspondence)
+            if (sample.material_id != 0) visible_bindings.push_back(sample.material_id);
+        std::sort(visible_bindings.begin(), visible_bindings.end());
+        visible_bindings.erase(std::unique(visible_bindings.begin(), visible_bindings.end()),
+                               visible_bindings.end());
+        std::uint64_t binding_generation = k_fnv_offset;
+        for (const auto binding : visible_bindings) hash_value(binding_generation, binding);
+        backend->set_generations({scene_transitions.scene_key().generation,
+                                  static_cast<std::uint64_t>(active_preset + 1),
+                                  binding_generation});
 
         for (const auto &job : jobs) {
             try {

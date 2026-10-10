@@ -21,6 +21,15 @@ captured frames and complete upload buffers under a short mutex. There is one
 pending and one ready slot; newer capture work is dropped while either slot is
 occupied, providing natural backpressure.
 
+On Win32, model execution crosses into the packaged x64 `NeuralPassWorker.exe`
+because the pinned ONNX Runtime DirectML distribution has no Win32 binaries. A
+random per-process named pipe carries fixed-size versioned control records; one
+private 8 MiB file mapping carries exactly one float RGBA tile at a time. The
+add-on never passes handles or pointers across architectures. Width, height, and
+payload bounds are validated at both ends, and the response must echo the request,
+scene, style, and visible-binding generations. A disconnect causes one clean worker
+restart and retry. The ordinary x64 add-on retains its in-process ONNX path.
+
 ## Coordinate contracts
 
 - Motion is **current pixel to previous pixel**, measured in pixels.

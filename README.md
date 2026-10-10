@@ -63,14 +63,17 @@ fetches the checksum-verified Candy model, builds/tests Release x64, and creates
 ```bat
 build_windows.cmd directml all
 build_windows.cmd preview
+build_windows.cmd directml x86
 build_windows.cmd preview x86
 ```
 
 The first downloads every bundled art model. The second omits ONNX Runtime and
 builds the x64 temporal pipeline with its clearly-labelled preview backend. The
-third builds/tests a Win32 add-on and creates `dist\NeuralPass-x86`. Microsoft's
-current ONNX Runtime DirectML package has no Win32 runtime, so x86 intentionally
-uses the preview backend rather than mixing architectures.
+third builds/tests a Win32 add-on and creates `dist\NeuralPass-x86` with an x64
+`NeuralPassWorker.exe`. Microsoft's current ONNX Runtime DirectML package has no
+Win32 runtime, so the add-on exchanges bounded tiles with that architecture-matched
+host through a private named pipe and an 8 MiB shared-memory mailbox. The fourth
+command remains useful when a fully self-contained non-neural Win32 preview is wanted.
 
 ### Manual build
 
@@ -128,6 +131,9 @@ The add-on intentionally drops capture frames when inference is behind. It
 never queues an unbounded amount of work or blocks the game waiting for a tile.
 In the DirectML build, D3D11 uses the DirectML execution provider; other graphics
 APIs use ONNX Runtime's CPU provider until their device-loss stress gates pass.
+The x86 add-on launches the packaged x64 worker for either provider and restarts it
+once after a broken transport or provider failure. Every response must echo the
+request, scene, style, and visible-binding generations before it can be committed.
 The overlay reports `onnx/directml`, `onnx/cpu`, or `preview/...` so the active
 backend is never ambiguous. On D3D11, the add-on resolves the game's DXGI adapter
 LUID and passes that adapter index to DirectML instead of assuming adapter zero.
@@ -300,7 +306,7 @@ backend without starting the game.
   then styled chroma/contrast is mapped back while retaining scene luminance.
   Mismatched or unknown HDR format/color-space pairs are bypassed. The math has
   automated round-trip coverage, but HDR monitor/game validation remains.
-- DirectML model execution has an automated NVIDIA smoke test on the development
+- DirectML model execution, including the x86-to-x64 worker transport, has an automated NVIDIA smoke test on the development
   machine; AMD and Intel execution still require hardware validation.
 - The screen-space fallback cannot follow large camera motion as accurately as
   engine motion vectors; changed pixels are invalidated and restyled instead.

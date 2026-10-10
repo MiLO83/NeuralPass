@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import struct
 import sys
 from pathlib import Path
 
@@ -32,6 +33,16 @@ def digest(path: Path) -> str:
     return value
 
 
+def pe_machine(path: Path) -> int:
+    data = path.read_bytes()
+    if len(data) < 0x40 or data[:2] != b"MZ":
+        raise SystemExit(f"not a PE image: {path.name}")
+    offset = struct.unpack_from("<I", data, 0x3C)[0]
+    if offset + 6 > len(data) or data[offset:offset + 4] != b"PE\0\0":
+        raise SystemExit(f"invalid PE header: {path.name}")
+    return struct.unpack_from("<H", data, offset + 4)[0]
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: validate_package.py PACKAGE_DIRECTORY")
@@ -49,6 +60,9 @@ def main() -> int:
         raise SystemExit(f"unknown package architecture: {architecture}")
     if not (root / addon).is_file():
         raise SystemExit(f"package is missing architecture-matched add-on: {addon}")
+    expected_machine = {"windows-x64": 0x8664, "windows-x86": 0x014C}[architecture]
+    if pe_machine(root / addon) != expected_machine:
+        raise SystemExit(f"add-on PE architecture does not match {architecture}")
     expected: dict[str, str] = {}
     for line in (root / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines():
         checksum, marker = line.split(" ", 1)
@@ -69,11 +83,14 @@ def main() -> int:
     mode = metadata.get("mode")
     if mode == "directml":
         runtime = {"onnxruntime.dll", "onnxruntime_providers_shared.dll", "DirectML.dll",
+                   "NeuralPassWorker.exe",
                    "NeuralPassHardwareTest.exe", "Validate NeuralPass Hardware.cmd",
                    "Validate-NeuralPassHardware.ps1"}
         absent = sorted(name for name in runtime if not (root / name).is_file())
         if absent:
             raise SystemExit("DirectML package is missing: " + ", ".join(absent))
+        if pe_machine(root / "NeuralPassWorker.exe") != 0x8664:
+            raise SystemExit("NeuralPassWorker.exe must be an x64 PE image")
         if not list((root / "models" / "downloads").glob("*.onnx")):
             raise SystemExit("DirectML package contains no ONNX model")
         notices = {

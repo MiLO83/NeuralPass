@@ -34,10 +34,12 @@ jobs:
         env:
           NP_DIRECTML_TEST: OFF
         run: build_windows.cmd directml
-      - name: Build and test Windows x86 preview add-on
+      - name: Build and test Windows x86 worker-backed add-on
         if: runner.os == 'Windows'
         shell: cmd
-        run: build_windows.cmd preview x86
+        env:
+          NP_DIRECTML_TEST: OFF
+        run: build_windows.cmd directml x86
       - name: Upload Windows DirectML package
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v7
@@ -45,10 +47,10 @@ jobs:
           name: NeuralPass-windows-x64-directml
           path: dist/NeuralPass
           if-no-files-found: error
-      - name: Upload Windows x86 preview package
+      - name: Upload Windows x86 worker-backed package
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v7
         with:
-          name: NeuralPass-windows-x86-preview
+          name: NeuralPass-windows-x86-worker-directml
           path: dist/NeuralPass-x86
           if-no-files-found: error

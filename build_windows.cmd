@@ -5,7 +5,8 @@ rem NeuralPass Windows x64/x86 builder.
 rem Usage:
 rem   build_windows.cmd                       Build x64 DirectML with Candy
 rem   build_windows.cmd directml all x64      Build x64 DirectML with all models
-rem   build_windows.cmd preview x86           Build 32-bit preview backend
+rem   build_windows.cmd directml x86           Build 32-bit add-on plus x64 worker
+rem   build_windows.cmd preview x86            Build 32-bit preview backend
 
 cd /d "%~dp0"
 set "NP_ROOT=%CD%"
@@ -33,11 +34,6 @@ if /I not "%NP_ARCH%"=="x64" if /I not "%NP_ARCH%"=="x86" (
     echo ERROR: Architecture must be x64 or x86.
     exit /b 2
 )
-if /I "%NP_MODE%"=="directml" if /I "%NP_ARCH%"=="x86" (
-    echo ERROR: Microsoft.ML.OnnxRuntime.DirectML 1.24.4 has no Win32 runtime.
-    echo        Use "build_windows.cmd preview x86" for the tested 32-bit package.
-    exit /b 2
-)
 if /I "%NP_ARCH%"=="x86" (
     set "NP_CMAKE_ARCH=Win32"
     set "NP_ADDON=NeuralPass.addon32"
@@ -61,19 +57,45 @@ if /I "%NP_MODE%"=="directml" (
     call :prepare_directml || exit /b 1
     call :prepare_models || exit /b 1
     set "NP_BUILD=%NP_ROOT%\build-windows-directml-%NP_ARCH%"
+    set "NP_WORKER_BUILD=%NP_ROOT%\build-windows-directml-x64"
 ) else (
     set "NP_BUILD=%NP_ROOT%\build-windows-preview-%NP_ARCH%"
 )
 
-echo [4/6] Configuring CMake...
-if /I "%NP_MODE%"=="directml" (
-    cmake -S "%NP_ROOT%" -B "%NP_BUILD%" -A %NP_CMAKE_ARCH% ^
+if /I "%NP_MODE%"=="directml" if /I "%NP_ARCH%"=="x86" if not exist "%NP_WORKER_BUILD%\Release\NeuralPassWorker.exe" (
+    echo       Building the required x64 inference worker...
+    cmake -S "%NP_ROOT%" -B "%NP_WORKER_BUILD%" -A x64 ^
       -DNEURALPASS_BUILD_ADDON=ON ^
       -DNEURALPASS_BUILD_TESTS=ON ^
       -DCMAKE_SUPPRESS_REGENERATION=ON ^
-      -DNEURALPASS_TEST_DIRECTML=%NP_DIRECTML_TEST% ^
+      -DNEURALPASS_TEST_DIRECTML=OFF ^
       -DRESHADE_SDK_DIR="%NP_ROOT%\external\reshade" ^
       -DONNXRUNTIME_ROOT="%NP_ROOT%\external\onnxruntime"
+    if errorlevel 1 goto :failed
+    cmake --build "%NP_WORKER_BUILD%" --config Release --target NeuralPassWorker neuralpass_onnx_smoke_tests --parallel
+    if errorlevel 1 goto :failed
+)
+
+echo [4/6] Configuring CMake...
+if /I "%NP_MODE%"=="directml" (
+    if /I "%NP_ARCH%"=="x86" (
+        cmake -S "%NP_ROOT%" -B "%NP_BUILD%" -A %NP_CMAKE_ARCH% ^
+          -DNEURALPASS_BUILD_ADDON=ON ^
+          -DNEURALPASS_BUILD_TESTS=ON ^
+          -DCMAKE_SUPPRESS_REGENERATION=ON ^
+          -DNEURALPASS_TEST_DIRECTML=OFF ^
+          -DNEURALPASS_EXTERNAL_WORKER="%NP_WORKER_BUILD%\Release\NeuralPassWorker.exe" ^
+          -DRESHADE_SDK_DIR="%NP_ROOT%\external\reshade" ^
+          -DONNXRUNTIME_ROOT=
+    ) else (
+        cmake -S "%NP_ROOT%" -B "%NP_BUILD%" -A %NP_CMAKE_ARCH% ^
+          -DNEURALPASS_BUILD_ADDON=ON ^
+          -DNEURALPASS_BUILD_TESTS=ON ^
+          -DCMAKE_SUPPRESS_REGENERATION=ON ^
+          -DNEURALPASS_TEST_DIRECTML=%NP_DIRECTML_TEST% ^
+          -DRESHADE_SDK_DIR="%NP_ROOT%\external\reshade" ^
+          -DONNXRUNTIME_ROOT="%NP_ROOT%\external\onnxruntime"
+    )
 ) else (
     cmake -S "%NP_ROOT%" -B "%NP_BUILD%" -A %NP_CMAKE_ARCH% ^
       -DNEURALPASS_BUILD_ADDON=ON ^
@@ -127,7 +149,13 @@ if /I "%NP_MODE%"=="directml" (
     copy /Y "%NP_ROOT%\external\onnxruntime\lib\onnxruntime.dll" "%NP_DIST%\onnxruntime.dll" >nul
     copy /Y "%NP_ROOT%\external\onnxruntime\lib\onnxruntime_providers_shared.dll" "%NP_DIST%\onnxruntime_providers_shared.dll" >nul
     copy /Y "%NP_ROOT%\external\onnxruntime\lib\DirectML.dll" "%NP_DIST%\DirectML.dll" >nul
-    copy /Y "%NP_BUILD%\Release\neuralpass_onnx_smoke_tests.exe" "%NP_DIST%\NeuralPassHardwareTest.exe" >nul
+    if /I "%NP_ARCH%"=="x86" (
+        copy /Y "%NP_WORKER_BUILD%\Release\NeuralPassWorker.exe" "%NP_DIST%\NeuralPassWorker.exe" >nul
+        copy /Y "%NP_WORKER_BUILD%\Release\neuralpass_onnx_smoke_tests.exe" "%NP_DIST%\NeuralPassHardwareTest.exe" >nul
+    ) else (
+        copy /Y "%NP_BUILD%\Release\NeuralPassWorker.exe" "%NP_DIST%\NeuralPassWorker.exe" >nul
+        copy /Y "%NP_BUILD%\Release\neuralpass_onnx_smoke_tests.exe" "%NP_DIST%\NeuralPassHardwareTest.exe" >nul
+    )
     copy /Y "%NP_ROOT%\packaging\Validate NeuralPass Hardware.cmd" "%NP_DIST%\Validate NeuralPass Hardware.cmd" >nul
     copy /Y "%NP_ROOT%\packaging\Validate-NeuralPassHardware.ps1" "%NP_DIST%\Validate-NeuralPassHardware.ps1" >nul
     if not exist "%NP_DIST%\models\downloads" mkdir "%NP_DIST%\models\downloads"

@@ -88,18 +88,18 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 3. GRAPHICS API ADAPTERS
 ------------------------
 [~] Production D3D9 x86/x64 capture and replacement.
-    Evidence: experimental x64 Shader Model 3 token parsing, direct/indexed replay,
+    Evidence: x86/x64 Shader Model 3 token parsing, direct/indexed replay,
     four-plane capture, full state-block restoration, and same-source lockable
     texture replacement isolation pass a native D3D9 HAL test. Synchronous readback,
-    missing fragment depth, device loss, x86, broad hardware/games, and soak remain.
+    missing fragment depth, device loss, broad hardware/games, and soak remain.
 [~] Production D3D10 x86/x64 capture and replacement.
-    Evidence: experimental x64 Shader Model 4 direct/indexed replay, four-plane
+    Evidence: experimental x86/x64 Shader Model 4 direct/indexed replay, four-plane
     asynchronous capture, complete touched-state restoration, coverage-safe
     RGBA8/BGRA8 replacement, and same-source material isolation pass D3D10 WARP.
-    Device loss, x86, hardware/game evidence, and soak testing remain.
+    Device loss, hardware/game evidence, and soak testing remain.
 [~] Production D3D11 x86/x64 capture and replacement.
-    Evidence: x64 D3D11 capture plus coverage-safe RGBA8/BGRA8 substitution passes WARP;
-    direct/indirect indexed and non-indexed instanced draws are covered; x86, broad
+    Evidence: x86/x64 D3D11 capture plus coverage-safe RGBA8/BGRA8 substitution passes WARP;
+    direct/indirect indexed and non-indexed instanced draws are covered; broad
     formats, and real-game validation remain.
 [~] Production D3D12 x64 capture and replacement.
     Evidence: experimental x64 adapter records graphics PSOs, replays direct/indexed
@@ -150,11 +150,15 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 
 4. MANAGED NEURAL RUNTIME
 -------------------------
-[ ] Replace the WSL filesystem bridge with NeuralPassWorker.exe.
-    The legacy bridge is now disabled by default; packaged ONNX/preview inference
-    remains self-contained while the managed prompt-worker transport is unfinished.
-[ ] Add versioned named-pipe control and bounded shared-memory transport.
-[ ] Reject stale scene, style, binding, and request generations.
+[~] Replace the WSL filesystem bridge with NeuralPassWorker.exe.
+    Evidence: packaged fixed-model inference now has a native x64 worker used by the
+    Win32 add-on; prompt-driven diffusion still uses the opt-in legacy bridge.
+[x] Add versioned named-pipe control and bounded shared-memory transport.
+    Evidence: protocol-v1 control records and a private 8 MiB single-tile mailbox pass
+    native x64 and x86-to-x64 ONNX integration tests plus portable bounds tests.
+[x] Reject stale scene, style, binding, and request generations.
+    Evidence: the worker echoes all four identities; portable mutation tests prove
+    each mismatch and failed response is rejected before shared output is consumed.
 [~] Support ONNX Runtime DirectML on NVIDIA, AMD, and Intel.
     Evidence: pinned Candy model executes through ONNX CPU and DirectML with finite,
     dimension-correct output on NVIDIA RTX 5060 Ti. D3D11 resolves the game adapter
@@ -170,8 +174,13 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     Blocker: the moved WSL environment is missing torch and onnxruntime packages.
 [ ] Separate first-observation styling and newly-visible inpainting masks.
 [ ] Add global prompt and per-binding controls.
-[ ] Add adaptive frame-time/GPU-headroom control and worker crash recovery.
-[ ] Pin model versions, licenses, and SHA-256 hashes.
+[~] Add adaptive frame-time/GPU-headroom control and worker crash recovery.
+    Evidence: broken worker transports are restarted and retried once; x64 and
+    x86-to-x64 integration suites force process exit during a request and prove a
+    fresh child completes the retried tile. Adaptive GPU-headroom control remains.
+[x] Pin model versions, licenses, and SHA-256 hashes.
+    Evidence: schema-validated manifest pins four model URLs/versioned filenames,
+    BSD-3-Clause licenses, and exact SHA-256 values; downloads fail closed.
 
 5. PERSISTENCE AND MIGRATION
 ----------------------------
@@ -189,7 +198,7 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 6. INSTALLER, SAFETY, AND DOCUMENTATION
 ---------------------------------------
 [~] Build x86/x64 installer, updater, diagnostics, model manager, and uninstaller.
-    Evidence: architecture-aware manifest-scoped x64 and x86 packages, installer,
+    Evidence: architecture-aware manifest-scoped x64 and worker-backed x86 packages, installer,
     uninstaller, and diagnostics are built and checksum-validated; the Win32 add-on
     and D3D9/10/11/12 suites pass. Updater and model-manager work remains.
 [~] Detect target API, ReShade support, GPU provider, HDR mode, and worker health.
@@ -240,14 +249,14 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [~] Resize, device-loss, corrupt-cache, and worker-restart tests pass.
     Evidence: swapchain resize teardown releases adapter resources before reset;
     native D3D9/10/11/12 tests recreate capture at new dimensions without stale
-    readback, and cache corruption is isolated. Forced removal and worker restart
-    tests plus Vulkan runtime coverage remain.
+    readback, cache corruption is isolated, and native x64 plus x86-to-x64 tests
+    recover from forced worker death. Forced GPU removal and Vulkan runtime coverage remain.
 [ ] Steel Nomad D3D12 stress validation passes.
 [ ] Each API completes a 60-minute soak without crash or device removal.
 [ ] Clean-machine install, update, removal, and signature verification pass.
 [~] GitHub Windows/Linux x86/x64 CI is green.
     Evidence: Linux validates the portable core; Windows builds/tests/packages the
-    x64 DirectML and x86 preview ReShade add-ons, including native D3D9/10/11/12
+    x64 DirectML and x86 worker-backed ReShade add-ons, including native D3D9/10/11/12
     suites, and uploads both. DirectML execution passes on the development NVIDIA
     GPU; hosted runners have no valid adapter. AMD/Intel and game evidence remain.
 [ ] No open severity-1 or severity-2 defects.

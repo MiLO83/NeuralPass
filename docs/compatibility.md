@@ -8,7 +8,7 @@ full add-on build of ReShade. It is not suitable for protected multiplayer games
 | Area | Current status |
 | --- | --- |
 | Windows / x64 | Automated DirectML build/package plus native D3D9 and D3D10/D3D11/D3D12 tests |
-| Windows / x86 | Automated preview build/package; 32-bit D3D9/10/11/12 native suites pass |
+| Windows / x86 | Automated worker-backed DirectML build/package; 32-bit D3D9/10/11/12 native suites and x86-to-x64 ONNX transport pass |
 | D3D9 | Experimental SM3 direct/indexed capture; synchronous readback, no fragment depth, lockable 32-bit replacement only |
 | D3D10 | Experimental direct/indexed geometry capture and RGBA8/BGRA8 replacement |
 | D3D11 | Experimental geometry capture and RGBA8/BGRA8 replacement |
@@ -18,7 +18,7 @@ full add-on build of ReShade. It is not suitable for protected multiplayer games
 | HDR / scRGB | Experimental FP16 scRGB and RGB10A2 HDR10/PQ paths with declared-color-space validation and luminance-preserving composition; monitor/game validation pending |
 | DirectML | Game-device DXGI adapter is selected by LUID; model execution smoke-tested on NVIDIA; packaged evidence test supports explicit adapter indices; AMD and Intel evidence remains |
 | CUDA | Legacy Python bridge only; not part of the managed package |
-| x86 games | Experimental `addon32` preview package; DirectML unavailable because the pinned ONNX Runtime package has no Win32 runtime; real-game validation pending |
+| x86 games | Experimental `addon32` package launches the x64 ONNX/DirectML worker over bounded shared memory; real-game validation pending |
 
 Unsupported capture paths fall back to the screen-space compositor. They do not
 guess mesh UVs or write guessed data into persistent material atlases.
@@ -31,7 +31,8 @@ pairs are bypassed rather than treated as plausible HDR.
 
 The legacy prompt-driven StreamDiffusion/WSL bridge is disabled by default and
 is not required by either package. Enable it only after separately starting its
-Python environment; otherwise the built-in ONNX or preview worker is used.
+Python environment. This is distinct from the packaged `NeuralPassWorker.exe`,
+which provides fixed-model ONNX inference to the 32-bit add-on without WSL.
 
 ## Safe installation
 
@@ -83,8 +84,8 @@ execution on that machine; it does not substitute for a game soak test.
 4. Confirm `reshade-shaders/Shaders/NeuralPass.fx` exists and compiles in ReShade.
 5. Keep **NeuralPass (keep last)** last in technique order.
 6. For a DirectML package, confirm `onnxruntime.dll`,
-   `onnxruntime_providers_shared.dll`, `DirectML.dll`, and the selected `.onnx` model
-   are present.
+   `onnxruntime_providers_shared.dll`, `DirectML.dll`, `NeuralPassWorker.exe`, and
+   the selected `.onnx` model are present.
 7. Generate diagnostics and inspect `ReShade.log` for add-on load or shader errors.
 
 If geometry capture reports unsupported draws, the screen-space path should continue

@@ -6,6 +6,7 @@ option(NEURALPASS_BUILD_TESTS "Build platform-neutral tests" ON)
 option(NEURALPASS_TEST_DIRECTML "Execute DirectML inference tests (requires a GPU adapter)" ON)
 set(RESHADE_SDK_DIR "" CACHE PATH "Path to a ReShade checkout (must contain include/reshade.hpp)")
 set(ONNXRUNTIME_ROOT "" CACHE PATH "Optional ONNX Runtime DirectML package root")
+set(NEURALPASS_EXTERNAL_WORKER "" CACHE FILEPATH "Optional x64 NeuralPassWorker.exe for Win32 tests/package")
 
 add_library(neuralpass_core STATIC
     src/atlas_cache.cpp
@@ -36,6 +37,10 @@ if(NEURALPASS_BUILD_TESTS)
     target_include_directories(neuralpass_vulkan_spirv_tests PRIVATE addon)
     target_compile_features(neuralpass_vulkan_spirv_tests PRIVATE cxx_std_20)
     add_test(NAME neuralpass_vulkan_spirv COMMAND neuralpass_vulkan_spirv_tests)
+    add_executable(neuralpass_worker_protocol_tests tests/worker_protocol_tests.cpp)
+    target_include_directories(neuralpass_worker_protocol_tests PRIVATE include)
+    target_compile_features(neuralpass_worker_protocol_tests PRIVATE cxx_std_20)
+    add_test(NAME neuralpass_worker_protocol COMMAND neuralpass_worker_protocol_tests)
     if(WIN32)
         add_executable(neuralpass_d3d9_capture_tests
             addon/d3d9_surface_capture.cpp
@@ -95,6 +100,7 @@ if(NEURALPASS_BUILD_ADDON)
         addon/d3d12_surface_capture.cpp
         addon/vulkan_surface_capture.cpp
         addon/neuralpass_addon.cpp
+        src/inference_worker_client.cpp
         "${RESHADE_SDK_DIR}/examples/utils/descriptor_tracking.cpp")
     target_compile_features(NeuralPassAddon PRIVATE cxx_std_20)
     target_include_directories(NeuralPassAddon PRIVATE include
@@ -139,8 +145,65 @@ if(NEURALPASS_BUILD_ADDON)
                         "${CMAKE_SOURCE_DIR}/models/downloads/candy-9.onnx" directml)
             endif()
         endif()
+        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+            add_executable(NeuralPassWorker
+                src/inference_onnx.cpp
+                src/worker_main.cpp)
+            target_include_directories(NeuralPassWorker PRIVATE
+                include "${ONNXRUNTIME_ROOT}/include")
+            target_compile_features(NeuralPassWorker PRIVATE cxx_std_20)
+            target_compile_definitions(NeuralPassWorker PRIVATE
+                NEURALPASS_HAS_ONNXRUNTIME NEURALPASS_USE_DIRECTML
+                WIN32_LEAN_AND_MEAN NOMINMAX)
+            target_link_directories(NeuralPassWorker PRIVATE "${ONNXRUNTIME_ROOT}/lib")
+            target_link_libraries(NeuralPassWorker PRIVATE neuralpass_core onnxruntime)
+            add_custom_command(TARGET NeuralPassWorker POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${ONNXRUNTIME_ROOT}/lib/onnxruntime.dll"
+                    "${ONNXRUNTIME_ROOT}/lib/onnxruntime_providers_shared.dll"
+                    "${ONNXRUNTIME_ROOT}/lib/DirectML.dll"
+                    "$<TARGET_FILE_DIR:NeuralPassWorker>")
+            if(NEURALPASS_BUILD_TESTS)
+                add_executable(neuralpass_worker_smoke_tests
+                    src/inference_worker_client.cpp
+                    tests/worker_smoke_tests.cpp)
+                target_include_directories(neuralpass_worker_smoke_tests PRIVATE include)
+                target_compile_features(neuralpass_worker_smoke_tests PRIVATE cxx_std_20)
+                target_compile_definitions(neuralpass_worker_smoke_tests PRIVATE
+                    WIN32_LEAN_AND_MEAN NOMINMAX)
+                target_link_libraries(neuralpass_worker_smoke_tests PRIVATE neuralpass_core)
+                add_dependencies(neuralpass_worker_smoke_tests NeuralPassWorker)
+                add_test(NAME neuralpass_worker_cpu
+                    COMMAND neuralpass_worker_smoke_tests "$<TARGET_FILE:NeuralPassWorker>"
+                        "${CMAKE_SOURCE_DIR}/models/downloads/candy-9.onnx" cpu)
+                if(NEURALPASS_TEST_DIRECTML)
+                    add_test(NAME neuralpass_worker_directml
+                        COMMAND neuralpass_worker_smoke_tests "$<TARGET_FILE:NeuralPassWorker>"
+                            "${CMAKE_SOURCE_DIR}/models/downloads/candy-9.onnx" directml)
+                endif()
+            endif()
+        endif()
     else()
-        message(WARNING "ONNXRUNTIME_ROOT not set: add-on will use the clearly-labelled preview backend")
+        if(CMAKE_SIZEOF_VOID_P EQUAL 4 AND NEURALPASS_EXTERNAL_WORKER AND
+           EXISTS "${NEURALPASS_EXTERNAL_WORKER}")
+            message(STATUS "Win32 add-on will use the x64 NeuralPass inference worker")
+        else()
+            message(WARNING "ONNXRUNTIME_ROOT not set: add-on will use the clearly-labelled preview backend")
+        endif()
+    endif()
+    if(NEURALPASS_BUILD_TESTS AND CMAKE_SIZEOF_VOID_P EQUAL 4 AND
+       NEURALPASS_EXTERNAL_WORKER AND EXISTS "${NEURALPASS_EXTERNAL_WORKER}")
+        add_executable(neuralpass_worker_smoke_tests
+            src/inference_worker_client.cpp
+            tests/worker_smoke_tests.cpp)
+        target_include_directories(neuralpass_worker_smoke_tests PRIVATE include)
+        target_compile_features(neuralpass_worker_smoke_tests PRIVATE cxx_std_20)
+        target_compile_definitions(neuralpass_worker_smoke_tests PRIVATE
+            WIN32_LEAN_AND_MEAN NOMINMAX)
+        target_link_libraries(neuralpass_worker_smoke_tests PRIVATE neuralpass_core)
+        add_test(NAME neuralpass_worker_x86_to_x64
+            COMMAND neuralpass_worker_smoke_tests "${NEURALPASS_EXTERNAL_WORKER}"
+                "${CMAKE_SOURCE_DIR}/models/downloads/candy-9.onnx" cpu)
     endif()
     if(CMAKE_SIZEOF_VOID_P EQUAL 8)
         set(NEURALPASS_ADDON_SUFFIX ".addon64")
