@@ -10,6 +10,7 @@
 #include "vulkan_surface_capture.hpp"
 #include "neuralpass/adaptive_budget.hpp"
 #include "neuralpass/binding_identity.hpp"
+#include "neuralpass/binding_style.hpp"
 #include "neuralpass/cache_namespace.hpp"
 #include "neuralpass/color_pipeline.hpp"
 #include "neuralpass/inference.hpp"
@@ -118,10 +119,18 @@ std::uint64_t game_build_identity() {
 }
 
 neuralpass::CacheNamespace cache_namespace_for(
-        std::string_view preset, std::string_view backend_name) {
+        std::string_view preset, std::string_view backend_name,
+        std::uint64_t binding_control_identity) {
     std::uint64_t style = k_fnv_offset;
     hash_string(style, "fixed-style-v1");
     hash_string(style, preset);
+    // Preserve the pre-control namespace for the all-default configuration so
+    // an upgrade does not discard compatible atlases. Only a real override
+    // extends the style identity.
+    if (binding_control_identity != neuralpass::binding_style_control_identity({})) {
+        hash_string(style, "binding-controls-v1");
+        hash_value(style, binding_control_identity);
+    }
     const auto model_path = g_addon_directory / "models" / "downloads" /
                             (std::string(preset) + "-9.onnx");
     std::uint64_t model = k_fnv_offset;
@@ -176,12 +185,16 @@ std::unordered_set<std::uint64_t> g_materials_seen;
 std::unordered_set<std::uint64_t> g_restart_stable_materials;
 std::unordered_map<std::uint64_t, int> g_source_slot_overrides;
 std::unordered_set<std::uint64_t> g_source_overrides_loaded;
+neuralpass::BindingStyleControls g_binding_style_controls;
+std::unordered_set<std::uint64_t> g_binding_style_controls_loaded;
+std::atomic_uint64_t g_binding_style_revision = 1;
 std::unordered_map<reshade::api::device *,
     std::unique_ptr<neuralpass::capture::SurfaceCaptureBackend>> g_surface_captures;
 std::unordered_map<void *, reshade::api::color_space> g_swapchain_color_spaces;
 std::mutex g_runtime_evidence_mutex;
 
 constexpr char k_source_slot_section[] = "NeuralPass.SourceSlots";
+constexpr char k_binding_strength_section[] = "NeuralPass.BindingStrength";
 
 std::string source_slot_key(std::uint64_t binding) {
     return std::to_string(binding);
@@ -205,6 +218,28 @@ void load_source_slot_once(std::uint64_t binding) {
         slot >= 0 && slot < static_cast<int>(D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT)) {
         std::lock_guard lock(g_baker_probe_mutex);
         g_source_slot_overrides[binding] = slot;
+    }
+}
+
+void persist_binding_strength(std::uint64_t binding, int strength) {
+    const auto key = source_slot_key(binding);
+    reshade::set_config_value(nullptr, k_binding_strength_section, key.c_str(), strength);
+}
+
+void load_binding_strength_once(std::uint64_t binding) {
+    bool should_load = false;
+    {
+        std::lock_guard lock(g_baker_probe_mutex);
+        should_load = g_binding_style_controls_loaded.insert(binding).second;
+    }
+    if (!should_load) return;
+    int strength = 100;
+    const auto key = source_slot_key(binding);
+    if (reshade::get_config_value(nullptr, k_binding_strength_section, key.c_str(), strength) &&
+        strength >= 0 && strength < 100) {
+        std::lock_guard lock(g_baker_probe_mutex);
+        g_binding_style_controls[binding] = static_cast<std::uint8_t>(strength);
+        ++g_binding_style_revision;
     }
 }
 
@@ -1000,6 +1035,7 @@ neuralpass::BindingInstanceKey record_baker_draw(
                     g_restart_stable_materials.insert(material.value);
                 }
                 load_source_slot_once(material.value);
+                load_binding_strength_once(material.value);
             }
             else ++g_session_material_draws;
             std::lock_guard lock(g_baker_probe_mutex);
@@ -1320,6 +1356,7 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::atomic_int scene_transition = static_cast<int>(neuralpass::SceneTransition::stable);
     std::uint64_t selected_binding = 0;
     int selected_source_slot = -1;
+    int selected_binding_strength = 100;
     std::atomic_int requested_preset = 0;
     std::array<char, 512> prompt {};
     std::vector<std::string> prompt_history;
@@ -1636,6 +1673,10 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         result.erase(std::unique(result.begin(), result.end()), result.end());
         return result;
     };
+    auto snapshot_binding_controls = [] {
+        std::lock_guard lock(g_baker_probe_mutex);
+        return std::pair {g_binding_style_controls, g_binding_style_revision.load()};
+    };
     auto save_active_scene = [&] {
         if (!active_scene || !active_scene->valid()) return;
         std::vector<std::uint64_t> stable(active_scene_materials.begin(),
@@ -1665,6 +1706,7 @@ void process_frames(RuntimeState *state, std::stop_token token) {
                  " atlases for persistent scene " +
                  std::to_string(active_scene->identity) + ".").c_str());
     };
+    auto [binding_controls, active_binding_style_revision] = snapshot_binding_controls();
     std::unique_ptr<neuralpass::InferenceBackend> backend;
     char *preset_value = nullptr;
     std::size_t preset_length = 0;
@@ -1708,7 +1750,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
     };
     backend = load_backend(active_preset);
     active_namespace = cache_namespace_for(
-        k_presets.at(static_cast<std::size_t>(active_preset)), backend->name());
+        k_presets.at(static_cast<std::size_t>(active_preset)), backend->name(),
+        neuralpass::binding_style_control_identity(binding_controls));
     if (!backend->name().starts_with("onnx/") &&
         !backend->name().starts_with("worker/")) {
         reshade::log::message(reshade::log::level::warning,
@@ -1726,6 +1769,7 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         std::uint32_t height = 0;
         neuralpass::MaterialTextureBakePlan plan;
         std::vector<neuralpass::SurfaceCorrespondence> correspondence;
+        Image<std::uint8_t> binding_strength;
     };
     std::optional<BridgeBakeContext> bridge_bake;
     Image<Color> previous_scene;
@@ -1868,6 +1912,42 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             correspondence.clear();
         state->scene_transition = static_cast<int>(transition);
         state->scene_generation = scene_transitions.scene_key().generation;
+
+        auto [latest_binding_controls, binding_style_revision] =
+            snapshot_binding_controls();
+        if (binding_style_revision != active_binding_style_revision) {
+            save_active_scene();
+            binding_controls = std::move(latest_binding_controls);
+            active_binding_style_revision = binding_style_revision;
+            if (!active_stream)
+                active_namespace = cache_namespace_for(
+                    k_presets.at(static_cast<std::size_t>(active_preset)), backend->name(),
+                    neuralpass::binding_style_control_identity(binding_controls));
+            material_baker.reset_scene();
+            published_replacements.clear();
+            {
+                std::lock_guard lock(state->mutex);
+                state->ready_replacements.clear();
+                state->bridge_ready.clear();
+            }
+            ++state->replacement_epoch;
+            ++style_generation;
+            history = {};
+            bridge_bake.reset();
+            if (!active_stream && active_scene && active_scene->valid()) {
+                const auto loaded = material_baker.load_cache(
+                    active_namespace.atlas_root(active_scene->directory));
+                if (loaded.loaded != 0)
+                    reshade::log::message(reshade::log::level::info,
+                        ("NeuralPass loaded " + std::to_string(loaded.loaded) +
+                         " atlases for the selected binding-control namespace.").c_str());
+            }
+        } else {
+            binding_controls = std::move(latest_binding_controls);
+        }
+        auto binding_style = neuralpass::plan_binding_styles(
+            frame.width, frame.height, correspondence, binding_controls);
+        correspondence = binding_style.active_correspondence;
         if (active_stream) {
             auto current_plan = material_baker.plan(
                 current, correspondence, reveal_classes ? &*reveal_classes : nullptr);
@@ -1889,7 +1969,11 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             std::uint64_t live_sequence = 0;
             if (read_live_frame(state->live_received.load(), live, live_sequence)) {
                 auto full_live = resize_nearest(live, frame.width, frame.height);
-                auto reconstructed = material_baker.reconstruct(unpack(full_live), correspondence);
+                auto live_image = unpack(full_live);
+                Image<std::uint8_t> live_valid(frame.width, frame.height, 1);
+                neuralpass::apply_binding_styles(live_image, live_valid, current,
+                    binding_style.strength_percent, {0, 0, frame.width, frame.height});
+                auto reconstructed = material_baker.reconstruct(live_image, correspondence);
                 publish_bridge_results(state, {pack(reconstructed)}, frame.width, frame.height);
                 state->live_received = live_sequence;
             }
@@ -1913,6 +1997,11 @@ void process_frames(RuntimeState *state, std::stop_token token) {
                         auto generated = resize_nearest(results.back(), bridge_bake->width,
                                                         bridge_bake->height);
                         auto generated_image = unpack(generated);
+                        Image<std::uint8_t> generated_valid(
+                            bridge_bake->width, bridge_bake->height, 1);
+                        neuralpass::apply_binding_styles(generated_image, generated_valid,
+                            bridge_bake->plan.live_frame, bridge_bake->binding_strength,
+                            {0, 0, bridge_bake->width, bridge_bake->height});
                         const auto baked = material_baker.commit(
                             bridge_bake->plan, generated_image, bridge_bake->correspondence);
                         if (!baked.stale) {
@@ -1935,7 +2024,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
                     bridge_bake = BridgeBakeContext {sequence, style_generation,
                         scene_transitions.scene_key(),
                         frame.width, frame.height,
-                        std::move(current_plan), correspondence};
+                        std::move(current_plan), correspondence,
+                        binding_style.strength_percent};
                 }
             }
             continue;
@@ -1946,7 +2036,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             active_preset = requested;
             backend = load_backend(active_preset);
             active_namespace = cache_namespace_for(
-                k_presets.at(static_cast<std::size_t>(active_preset)), backend->name());
+                k_presets.at(static_cast<std::size_t>(active_preset)), backend->name(),
+                neuralpass::binding_style_control_identity(binding_controls));
             material_baker.reset_scene();
             published_replacements.clear();
             {
@@ -2008,10 +2099,13 @@ void process_frames(RuntimeState *state, std::stop_token token) {
                 history.valid.at(sample.screen_x, sample.screen_y) = 0;
             }
         }
+        neuralpass::invalidate_bypassed_bindings(
+            history.valid, binding_style.strength_percent);
 
         Image<std::uint8_t> dirty(frame.width, frame.height, 0);
         for (std::size_t i = 0; i < dirty.size(); ++i)
-            dirty.pixels()[i] = history.valid.pixels()[i] ? 0 : 1;
+            dirty.pixels()[i] = binding_style.strength_percent.pixels()[i] == 0
+                ? 0 : (history.valid.pixels()[i] ? 0 : 1);
         const auto maximum_tile_budget = state->tile_budget.load();
         const bool adaptive_budget = state->adaptive_tile_budget.load();
         if (adaptive_budget && !adaptive_was_enabled) {
@@ -2059,6 +2153,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
                         history.valid.at(dx, dy) = 1;
                         history.age.at(dx, dy) = 0;
                     }
+                neuralpass::apply_binding_styles(history.styled, history.valid, current,
+                    binding_style.strength_percent, job.core);
             } catch (const std::exception &error) {
                 reshade::log::message(reshade::log::level::error, error.what());
             }
@@ -2580,9 +2676,11 @@ void on_destroy(reshade::api::effect_runtime *runtime) {
         std::filesystem::create_directories(bridge_directory(), error);
         std::ofstream report(bridge_directory() / "baker_probe.txt", std::ios::trunc);
         std::size_t material_count = 0;
+        std::size_t binding_style_control_count = 0;
         {
             std::lock_guard lock(g_baker_probe_mutex);
             material_count = g_materials_seen.size();
+            binding_style_control_count = g_binding_style_controls.size();
         }
         report << "pipelines=" << g_pipelines_seen.load() << '\n'
                << "uv_pipelines=" << g_uv_pipelines_seen.load() << '\n'
@@ -2608,6 +2706,8 @@ void on_destroy(reshade::api::effect_runtime *runtime) {
                << "measured_frame_time_us=" << (state != nullptr ? state->measured_frame_time_us.load() : 0) << '\n'
                << "measured_tile_time_us=" << (state != nullptr ? state->measured_tile_time_us.load() : 0) << '\n'
                << "budget_pressure_events=" << (state != nullptr ? state->budget_pressure_events.load() : 0) << '\n'
+               << "binding_style_controls=" << binding_style_control_count << '\n'
+               << "binding_style_revision=" << g_binding_style_revision.load() << '\n'
                << "unique_materials=" << material_count << '\n';
     }
     runtime->destroy_private_data<RuntimeState>();
@@ -2869,6 +2969,9 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
             const auto known = g_source_slot_overrides.find(state->selected_binding);
             state->selected_source_slot = known == g_source_slot_overrides.end()
                 ? -1 : known->second;
+            const auto style = g_binding_style_controls.find(state->selected_binding);
+            state->selected_binding_strength = style == g_binding_style_controls.end()
+                ? 100 : style->second;
         }
         const auto preview = std::to_string(state->selected_binding);
         if (ImGui::BeginCombo("Binding override", preview.c_str())) {
@@ -2881,6 +2984,9 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
                     const auto known = g_source_slot_overrides.find(binding);
                     state->selected_source_slot = known == g_source_slot_overrides.end()
                         ? -1 : known->second;
+                    const auto style = g_binding_style_controls.find(binding);
+                    state->selected_binding_strength = style == g_binding_style_controls.end()
+                        ? 100 : style->second;
                 }
                 if (selected) ImGui::SetItemDefaultFocus();
             }
@@ -2916,6 +3022,33 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         ImGui::TextDisabled(persistent_binding ?
             "Override persists for this restart-stable binding." :
             "This binding is session-only; its override cannot safely persist.");
+        ImGui::SliderInt("Binding style strength (0 = bypass)",
+                         &state->selected_binding_strength, 0, 100);
+        if (ImGui::Button("Apply binding style")) {
+            {
+                std::lock_guard lock(g_baker_probe_mutex);
+                if (state->selected_binding_strength >= 100)
+                    g_binding_style_controls.erase(state->selected_binding);
+                else
+                    g_binding_style_controls[state->selected_binding] =
+                        static_cast<std::uint8_t>(state->selected_binding_strength);
+                ++g_binding_style_revision;
+            }
+            if (persistent_binding)
+                persist_binding_strength(
+                    state->selected_binding, state->selected_binding_strength);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Reset binding style")) {
+            {
+                std::lock_guard lock(g_baker_probe_mutex);
+                g_binding_style_controls.erase(state->selected_binding);
+                ++g_binding_style_revision;
+            }
+            state->selected_binding_strength = 100;
+            if (persistent_binding) persist_binding_strength(state->selected_binding, 100);
+        }
+        ImGui::TextDisabled("Strength changes switch to an isolated style-cache namespace.");
     }
     std::uint64_t replayed_draws = 0;
     std::uint64_t capture_drops = 0;

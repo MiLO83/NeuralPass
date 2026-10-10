@@ -49,6 +49,18 @@ atlas persistence because its model is not package-versioned. Prompt identity is
 still a live style generation: changing it clears queued frames/replacements and
 rejects a late result from the preceding prompt.
 
+The material-control plane is API-neutral. Each captured binding defaults to
+100% style strength; a zero setting removes its correspondence from bake commits
+and invalidates its screen-space output so the live game pixel survives. Partial
+strength is blended exactly once into newly generated pixels before the
+framebuffer-to-source transfer. Controls backed by restart-stable binding IDs are
+stored in the per-game ReShade configuration. A sorted control-set fingerprint is
+part of the fixed-style cache identity, and every edit increments the worker style
+generation, clears queued replacements, and rejects older results. Session-only
+bindings get the same runtime behavior without unsafe cross-launch persistence.
+The all-default control set deliberately retains the original fixed-style identity,
+so upgrading does not strand otherwise compatible pre-control atlases.
+
 ## Coordinate contracts
 
 - Motion is **current pixel to previous pixel**, measured in pixels.

@@ -1,6 +1,7 @@
 #include "neuralpass/adaptive_budget.hpp"
 #include "neuralpass/temporal.hpp"
 #include "neuralpass/binding_identity.hpp"
+#include "neuralpass/binding_style.hpp"
 #include "neuralpass/color_pipeline.hpp"
 #include "neuralpass/cache_namespace.hpp"
 #include "neuralpass/depth_pyramid.hpp"
@@ -162,6 +163,59 @@ static void test_adaptive_budget_rejects_invalid_configuration() {
         rejected = true;
     }
     require(rejected, "inverted adaptive-budget bounds were accepted");
+}
+
+static void test_binding_style_controls_filter_blend_and_isolate_identity() {
+    std::vector<SurfaceCorrespondence> samples {
+        {.screen_x=0, .screen_y=0, .material_id=11},
+        {.screen_x=1, .screen_y=0, .material_id=22},
+        {.screen_x=2, .screen_y=0, .material_id=33},
+    };
+    BindingStyleControls controls {{11, 0}, {22, 50}};
+    const auto plan = plan_binding_styles(3, 1, samples, controls);
+    require(plan.active_correspondence.size() == 2 &&
+            plan.active_correspondence[0].material_id == 22 &&
+            plan.active_correspondence[1].material_id == 33,
+            "binding bypass did not filter only its own correspondence");
+    require(plan.strength_percent.at(0, 0) == 0 &&
+            plan.strength_percent.at(1, 0) == 50 &&
+            plan.strength_percent.at(2, 0) == 100,
+            "binding strength mask did not preserve independent controls");
+
+    Image<Color> live(3, 1, {0.2f, 0.4f, 0.6f, 0.7f});
+    Image<Color> styled(3, 1, {1.0f, 0.0f, 0.2f, 1.0f});
+    Image<std::uint8_t> valid(3, 1, 1);
+    apply_binding_styles(styled, valid, live, plan.strength_percent, {0, 0, 3, 1});
+    require(valid.at(0, 0) == 0 && styled.at(0, 0).r == live.at(0, 0).r,
+            "zero-strength binding did not preserve the live game pixel");
+    require(std::abs(styled.at(1, 0).r - 0.6f) < 0.0001f &&
+            std::abs(styled.at(1, 0).g - 0.2f) < 0.0001f &&
+            styled.at(1, 0).a == live.at(1, 0).a,
+            "partial binding strength was not applied exactly once");
+    require(styled.at(2, 0).r == 1.0f && valid.at(2, 0) == 1,
+            "default binding control changed generated output");
+
+    Image<std::uint8_t> stale_valid(3, 1, 1);
+    invalidate_bypassed_bindings(stale_valid, plan.strength_percent);
+    require(stale_valid.at(0, 0) == 0 && stale_valid.at(1, 0) == 1,
+            "bypass invalidation altered a partially styled binding");
+
+    const BindingStyleControls reversed {{22, 50}, {11, 0}, {33, 100}};
+    require(binding_style_control_identity(controls) ==
+                binding_style_control_identity(reversed),
+            "binding control identity depended on map order or explicit defaults");
+    require(binding_style_control_identity(controls) !=
+                binding_style_control_identity(BindingStyleControls {{11, 0}, {22, 51}}),
+            "binding strength change reused the same style identity");
+
+    bool rejected = false;
+    try {
+        apply_binding_styles(styled, valid, Image<Color>(2, 1),
+                             plan.strength_percent, {0, 0, 2, 1});
+    } catch (const std::invalid_argument &) {
+        rejected = true;
+    }
+    require(rejected, "mismatched binding-control images were accepted");
 }
 
 static void test_preview_backend_is_bounded() {
@@ -967,6 +1021,7 @@ int main() {
         test_newly_visible_tiles_preempt_initial_styling();
         test_adaptive_budget_sheds_pressure_and_recovers_slowly();
         test_adaptive_budget_rejects_invalid_configuration();
+        test_binding_style_controls_filter_blend_and_isolate_identity();
         test_preview_backend_is_bounded();
         test_hdr_color_contract_is_bounded_and_luminance_stable();
         test_runtime_display_evidence_json_is_exact_and_escaped();

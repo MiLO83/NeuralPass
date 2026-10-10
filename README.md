@@ -242,6 +242,18 @@ Applied prompts are kept in `NeuralPassBridge/prompt_history.txt` (newest
 first, maximum 32). The editable prompt field has a **Prompt history** dropdown
 that restores any prior prompt before it is applied again.
 
+The global prompt applies to the complete prompt-driven stream. For material
+exceptions, select a captured binding in the add-on overlay and set **Binding
+style strength** from 0 to 100. Zero bypasses neural generation and preserves
+the live game pixels for that material; intermediate values blend the generated
+appearance once before it enters the texture atlas. Restart-stable bindings save
+their controls in the per-game ReShade configuration, while handle-derived
+bindings remain session-only. Applying a change rejects in-flight results,
+clears old GPU replacements, and switches to a cache namespace keyed by the
+complete control set, so an atlas baked at one strength cannot leak into another.
+These binding controls work with fixed presets and the stream path; free-text
+prompting itself still requires the explicitly enabled external stream backend.
+
 ## Persistent material texture baker
 
 The platform-neutral baker core accepts visible screen-pixel correspondences of
@@ -339,6 +351,8 @@ game executable build, selected style, inference backend, and exact model conten
 Changing presets saves the outgoing atlas generation, clears live replacements,
 and loads only the matching style/model generation, so old-style texture pixels
 cannot leak into the newly selected look.
+Per-binding strength/bypass settings participate in the same style identity and
+therefore receive the same stale-result rejection and cache isolation.
 
 `tools/prompt_restyle.py` is the slower SDXL-Lightning quality reference for a
 single screenshot. `tools/stream_restyle.py` benchmarks the persistent live

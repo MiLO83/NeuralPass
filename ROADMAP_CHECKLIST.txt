@@ -194,7 +194,16 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     commit-authorized reveal set. Newly disoccluded/front-facing/off-screen texels
     receive an explicit urgent scheduling lane ahead of bulk first-observation work;
     core tests prove mask separation, reject overlap/tampering, and verify preemption.
-[ ] Add global prompt and per-binding controls.
+[x] Add global prompt and per-binding controls.
+    Evidence: the overlay provides an applied global prompt with bounded history,
+    plus per-binding 0-100 strength and explicit zero-strength bypass across the
+    shared correspondence path. Restart-stable controls persist per game; session
+    identities remain volatile. A deterministic control-set fingerprint isolates
+    caches, and every change invalidates worker generations and GPU replacements.
+    Core tests prove binding-local filtering, exact one-time blending, live-pixel
+    bypass, default preservation, deterministic identity, and dimension rejection;
+    x64/x86 add-on builds pass. Free-text inference still requires the separately
+    labelled opt-in stream backend until the managed prompt worker is complete.
 [x] Add adaptive frame-time/GPU-headroom control and worker crash recovery.
     Evidence: broken worker transports are restarted and retried once; x64 and
     x86-to-x64 integration suites force process exit during a request and prove a
