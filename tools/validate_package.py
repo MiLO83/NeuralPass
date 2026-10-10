@@ -68,7 +68,9 @@ def main() -> int:
             raise SystemExit(f"checksum mismatch: {relative}")
     mode = metadata.get("mode")
     if mode == "directml":
-        runtime = {"onnxruntime.dll", "onnxruntime_providers_shared.dll", "DirectML.dll"}
+        runtime = {"onnxruntime.dll", "onnxruntime_providers_shared.dll", "DirectML.dll",
+                   "NeuralPassHardwareTest.exe", "Validate NeuralPass Hardware.cmd",
+                   "Validate-NeuralPassHardware.ps1"}
         absent = sorted(name for name in runtime if not (root / name).is_file())
         if absent:
             raise SystemExit("DirectML package is missing: " + ", ".join(absent))

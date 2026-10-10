@@ -155,7 +155,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [ ] Reject stale scene, style, binding, and request generations.
 [~] Support ONNX Runtime DirectML on NVIDIA, AMD, and Intel.
     Evidence: pinned Candy model executes through ONNX CPU and DirectML with finite,
-    dimension-correct output on NVIDIA RTX 5060 Ti; AMD and Intel hardware remain.
+    dimension-correct output on NVIDIA RTX 5060 Ti. D3D11 resolves the game adapter
+    by DXGI LUID instead of assuming adapter zero, and the package includes an
+    explicit-adapter evidence runner. AMD and Intel hardware reports remain.
 [~] Preserve HDR/scRGB through capture, inference conversion, and composition.
     Evidence: capture requires a proven FP16/scRGB or RGB10A2/HDR10-PQ pair;
     portable tests cover FP16 sanitization, bounded inference input, and neutral

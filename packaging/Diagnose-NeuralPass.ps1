@@ -26,6 +26,7 @@ $names = @(
     'NeuralPass.addon64', 'NeuralPass.addon32', 'ReShade.ini', 'ReShade.log', 'dxgi.dll', 'd3d9.dll',
     'd3d10.dll', 'd3d11.dll', 'd3d12.dll', 'opengl32.dll', 'onnxruntime.dll',
     'onnxruntime_providers_shared.dll', 'DirectML.dll', 'NeuralPass.install.json',
+    'NeuralPassHardwareTest.exe', 'NeuralPass-hardware-0.json',
     'NeuralPass/PACKAGE.json', 'NeuralPass/SHA256SUMS.txt'
 )
 foreach ($name in $names) {

@@ -16,7 +16,7 @@ full add-on build of ReShade. It is not suitable for protected multiplayer games
 | Vulkan | Experimental SPIR-V UV/source capture and transfer-source RGBA8/BGRA8 bounded-table replacement; no driver/game evidence |
 | SDR RGBA8 | Supported preview path |
 | HDR / scRGB | Experimental FP16 scRGB and RGB10A2 HDR10/PQ paths with declared-color-space validation and luminance-preserving composition; monitor/game validation pending |
-| DirectML | Model execution smoke-tested on NVIDIA; AMD and Intel hardware validation remains |
+| DirectML | Game-device DXGI adapter is selected by LUID; model execution smoke-tested on NVIDIA; packaged evidence test supports explicit adapter indices; AMD and Intel evidence remains |
 | CUDA | Legacy Python bridge only; not part of the managed package |
 | x86 games | Experimental `addon32` preview package; DirectML unavailable because the pinned ONNX Runtime package has no Win32 runtime; real-game validation pending |
 
@@ -61,6 +61,13 @@ Run `Diagnose NeuralPass.cmd` beside the game executable. It creates
 
 Review the report before sharing it. It intentionally avoids environment variables,
 user tokens, registry dumps, process lists, and arbitrary files.
+
+The x64 DirectML package additionally includes `Validate NeuralPass Hardware.cmd`.
+It runs the packaged model through DirectML and writes
+`NeuralPass-hardware-<device>.json` with adapter/driver metadata and the exact test
+result. Use an optional numeric argument to select a non-default DXGI adapter,
+for example `Validate NeuralPass Hardware.cmd 1`. A passing report proves model
+execution on that machine; it does not substitute for a game soak test.
 
 ## Troubleshooting order
 

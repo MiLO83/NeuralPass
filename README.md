@@ -129,7 +129,11 @@ never queues an unbounded amount of work or blocks the game waiting for a tile.
 In the DirectML build, D3D11 uses the DirectML execution provider; other graphics
 APIs use ONNX Runtime's CPU provider until their device-loss stress gates pass.
 The overlay reports `onnx/directml`, `onnx/cpu`, or `preview/...` so the active
-backend is never ambiguous.
+backend is never ambiguous. On D3D11, the add-on resolves the game's DXGI adapter
+LUID and passes that adapter index to DirectML instead of assuming adapter zero.
+The x64 DirectML package also includes `Validate NeuralPass Hardware.cmd`; run it
+outside the game to execute a finite-output model smoke test and write a shareable
+JSON evidence report. Pass a DXGI device index when testing a non-default adapter.
 See [`docs/compatibility.md`](docs/compatibility.md) for the API support matrix,
 safety policy, diagnostics, and troubleshooting sequence.
 

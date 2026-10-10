@@ -20,7 +20,8 @@ public:
 
 #ifdef NEURALPASS_HAS_ONNXRUNTIME
 [[nodiscard]] std::unique_ptr<InferenceBackend> make_onnx_backend(const std::string &model_path,
-                                                                  bool use_directml);
+                                                                  bool use_directml,
+                                                                  std::uint32_t directml_device_id = 0);
 #endif
 
 } // namespace neuralpass

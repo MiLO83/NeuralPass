@@ -127,6 +127,9 @@ if /I "%NP_MODE%"=="directml" (
     copy /Y "%NP_ROOT%\external\onnxruntime\lib\onnxruntime.dll" "%NP_DIST%\onnxruntime.dll" >nul
     copy /Y "%NP_ROOT%\external\onnxruntime\lib\onnxruntime_providers_shared.dll" "%NP_DIST%\onnxruntime_providers_shared.dll" >nul
     copy /Y "%NP_ROOT%\external\onnxruntime\lib\DirectML.dll" "%NP_DIST%\DirectML.dll" >nul
+    copy /Y "%NP_BUILD%\Release\neuralpass_onnx_smoke_tests.exe" "%NP_DIST%\NeuralPassHardwareTest.exe" >nul
+    copy /Y "%NP_ROOT%\packaging\Validate NeuralPass Hardware.cmd" "%NP_DIST%\Validate NeuralPass Hardware.cmd" >nul
+    copy /Y "%NP_ROOT%\packaging\Validate-NeuralPassHardware.ps1" "%NP_DIST%\Validate-NeuralPassHardware.ps1" >nul
     if not exist "%NP_DIST%\models\downloads" mkdir "%NP_DIST%\models\downloads"
     copy /Y "%NP_ROOT%\models\downloads\*.onnx" "%NP_DIST%\models\downloads\" >nul
     copy /Y "%NP_ROOT%\models\manifest.json" "%NP_DIST%\models\manifest.json" >nul

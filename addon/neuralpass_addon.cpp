@@ -1215,6 +1215,7 @@ struct __declspec(uuid("F3110BBA-813B-4A3C-A848-4C594E504153")) RuntimeState {
     std::atomic_uint64_t active_scene_identity = 0;
     std::atomic_uint64_t scene_generation = 1;
     bool directml_enabled = false;
+    std::uint32_t directml_device_id = 0;
     std::atomic_uint64_t replacement_epoch = 1;
     std::uint64_t applied_replacement_epoch = 0;
     std::atomic_int scene_transition = static_cast<int>(neuralpass::SceneTransition::stable);
@@ -1560,7 +1561,7 @@ void process_frames(RuntimeState *state, std::stop_token token) {
                 // DirectML is enabled for the validated D3D11 path. Other APIs use
                 // the CPU provider until their device-loss stress gates pass.
                 return neuralpass::make_onnx_backend(
-                    model.string(), state->directml_enabled);
+                    model.string(), state->directml_enabled, state->directml_device_id);
         } catch (const std::exception &error) {
             reshade::log::message(reshade::log::level::error, error.what());
         }
@@ -2018,10 +2019,42 @@ void on_baker_destroy_device(reshade::api::device *device) {
     }
 }
 
+std::uint32_t find_dxgi_adapter_index(ID3D11Device *device) {
+    if (device == nullptr) return 0;
+    IDXGIDevice *dxgi_device = nullptr;
+    IDXGIAdapter *game_adapter = nullptr;
+    IDXGIFactory *factory = nullptr;
+    std::uint32_t result = 0;
+    if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&dxgi_device))) &&
+        SUCCEEDED(dxgi_device->GetAdapter(&game_adapter)) &&
+        SUCCEEDED(game_adapter->GetParent(IID_PPV_ARGS(&factory)))) {
+        DXGI_ADAPTER_DESC game_desc {};
+        if (SUCCEEDED(game_adapter->GetDesc(&game_desc))) {
+            for (UINT index = 0;; ++index) {
+                IDXGIAdapter *candidate = nullptr;
+                if (factory->EnumAdapters(index, &candidate) == DXGI_ERROR_NOT_FOUND) break;
+                DXGI_ADAPTER_DESC candidate_desc {};
+                const bool match = SUCCEEDED(candidate->GetDesc(&candidate_desc)) &&
+                    candidate_desc.AdapterLuid.HighPart == game_desc.AdapterLuid.HighPart &&
+                    candidate_desc.AdapterLuid.LowPart == game_desc.AdapterLuid.LowPart;
+                candidate->Release();
+                if (match) { result = index; break; }
+            }
+        }
+    }
+    if (factory != nullptr) factory->Release();
+    if (game_adapter != nullptr) game_adapter->Release();
+    if (dxgi_device != nullptr) dxgi_device->Release();
+    return result;
+}
+
 void on_init(reshade::api::effect_runtime *runtime) {
     auto *state = runtime->create_private_data<RuntimeState>();
     state->directml_enabled =
         runtime->get_device()->get_api() == reshade::api::device_api::d3d11;
+    if (state->directml_enabled)
+        state->directml_device_id = find_dxgi_adapter_index(
+            reinterpret_cast<ID3D11Device *>(runtime->get_device()->get_native()));
     std::copy_n(k_default_prompt, std::min(sizeof(k_default_prompt), state->prompt.size()),
                 state->prompt.data());
     const auto prompt_path = bridge_directory() / "prompt.txt";
@@ -2348,6 +2381,8 @@ void draw_overlay(reshade::api::effect_runtime *runtime) {
         backend = state->backend_name;
     }
     ImGui::Text("Backend: %s", backend.c_str());
+    if (state->directml_enabled)
+        ImGui::Text("DirectML DXGI adapter index: %u", state->directml_device_id);
     const char *color_path = "SDR sRGB";
     if (state->capture_encoding == neuralpass::DisplayEncoding::scrgb_linear)
         color_path = "scRGB linear (experimental)";

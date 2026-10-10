@@ -70,6 +70,12 @@ foreach ($optional in @('onnxruntime.dll', 'onnxruntime_providers_shared.dll', '
         $entries += @{ Source = $optional; Destination = $optional }
     }
 }
+foreach ($optional in @('NeuralPassHardwareTest.exe', 'Validate NeuralPass Hardware.cmd',
+                         'Validate-NeuralPassHardware.ps1')) {
+    if (Test-Path -LiteralPath (Join-Path $package $optional)) {
+        $entries += @{ Source = $optional; Destination = $optional }
+    }
+}
 if (Test-Path -LiteralPath (Join-Path $package 'models')) {
     Get-ChildItem -LiteralPath (Join-Path $package 'models') -File -Recurse | ForEach-Object {
         $relative = $_.FullName.Substring($package.Length + 1).Replace('\', '/')

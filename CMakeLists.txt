@@ -123,7 +123,7 @@ if(NEURALPASS_BUILD_ADDON)
             target_link_directories(neuralpass_onnx_smoke_tests PRIVATE
                 "${ONNXRUNTIME_ROOT}/lib")
             target_link_libraries(neuralpass_onnx_smoke_tests PRIVATE
-                neuralpass_core onnxruntime)
+                neuralpass_core onnxruntime dxgi)
             add_custom_command(TARGET neuralpass_onnx_smoke_tests POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${ONNXRUNTIME_ROOT}/lib/onnxruntime.dll"

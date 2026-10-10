@@ -50,8 +50,8 @@ Image<Color> resize_image(const Image<Color> &input, std::uint32_t width, std::u
 
 class OnnxBackend final : public InferenceBackend {
 public:
-    OnnxBackend(const std::string &path, bool use_directml)
-        : env_(ORT_LOGGING_LEVEL_WARNING, "NeuralPass"),
+    OnnxBackend(const std::string &path, bool use_directml, std::uint32_t directml_device_id)
+        : env_(ORT_LOGGING_LEVEL_ERROR, "NeuralPass"),
           display_name_(use_directml ? "onnx/directml" : "onnx/cpu") {
         Ort::SessionOptions options;
         options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
@@ -59,7 +59,8 @@ public:
         if (use_directml) {
             options.DisableMemPattern();
             options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
-            Ort::ThrowOnError(OrtSessionOptionsAppendExecutionProvider_DML(options, 0));
+            Ort::ThrowOnError(OrtSessionOptionsAppendExecutionProvider_DML(
+                options, static_cast<int>(directml_device_id)));
         }
 #else
         (void)use_directml;
@@ -132,8 +133,9 @@ private:
 
 } // namespace
 
-std::unique_ptr<InferenceBackend> make_onnx_backend(const std::string &path, bool use_directml) {
-    return std::make_unique<OnnxBackend>(path, use_directml);
+std::unique_ptr<InferenceBackend> make_onnx_backend(
+        const std::string &path, bool use_directml, std::uint32_t directml_device_id) {
+    return std::make_unique<OnnxBackend>(path, use_directml, directml_device_id);
 }
 
 } // namespace neuralpass
