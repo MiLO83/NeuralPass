@@ -360,8 +360,12 @@ int run() {
     VkInstanceCreateInfo instance_info {VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     instance_info.pApplicationInfo = &application;
     VkInstance instance = VK_NULL_HANDLE;
-    vk_require(vk.create_instance(&instance_info, nullptr, &instance),
-               "vkCreateInstance failed");
+    const auto instance_result = vk.create_instance(&instance_info, nullptr, &instance);
+    if (instance_result == VK_ERROR_INCOMPATIBLE_DRIVER) {
+        std::cout << "SKIP: Vulkan loader has no compatible installed driver\n";
+        return 77;
+    }
+    vk_require(instance_result, "vkCreateInstance failed");
     vk.load_instance(instance);
 
     std::uint32_t physical_count = 0;
