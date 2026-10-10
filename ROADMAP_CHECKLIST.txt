@@ -218,7 +218,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     Evidence: installer requires a graphics proxy; diagnostics report proxy-derived
     API candidates, GPU/driver data, package/install integrity, latest DirectML
     provider evidence, safety markers, and API/HDR/add-on evidence from ReShade logs.
-    Authoritative live HDR and worker-health probes remain.
+    The lifecycle suite runs the installed Vulkan probe and requires diagnostics to
+    consume its pass/no-ICD report; pre-install probes preserve package integrity by
+    writing below LocalAppData. Authoritative live HDR and worker-health probes remain.
 [x] Require explicit per-game activation.
     Evidence: the guided installer copies nothing until the user selects a game and
     types the exact activation phrase; isolated install/uninstall lifecycle passes.

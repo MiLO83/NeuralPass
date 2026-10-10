@@ -20,10 +20,28 @@ try {
         throw 'install manifest does not contain per-file integrity evidence'
     }
 
+    $vulkanValidator = Join-Path $game 'Validate-NeuralPassVulkan.ps1'
+    $vulkanProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$vulkanValidator`"") `
+        -Wait -PassThru -NoNewWindow
+    if ($vulkanProcess.ExitCode -notin @(0, 77)) {
+        throw "installed Vulkan validator failed with exit code $($vulkanProcess.ExitCode)"
+    }
+    $vulkanReportPath = Join-Path $game 'NeuralPass-vulkan-runtime.json'
+    if (-not (Test-Path -LiteralPath $vulkanReportPath -PathType Leaf)) {
+        throw 'installed Vulkan validator did not write evidence beside the game'
+    }
+    $vulkanReport = Get-Content -LiteralPath $vulkanReportPath -Raw | ConvertFrom-Json
+    if (($vulkanProcess.ExitCode -eq 0 -and -not $vulkanReport.passed) -or
+        ($vulkanProcess.ExitCode -eq 77 -and -not $vulkanReport.skipped)) {
+        throw 'installed Vulkan evidence does not classify its exit status correctly'
+    }
+
     & (Join-Path $packageRoot 'Diagnose-NeuralPass.ps1') -TargetPath $game
     $diagnostics = Get-Content -LiteralPath (Join-Path $game 'NeuralPass-diagnostics.txt') -Raw
     if ($diagnostics -notmatch 'Package provenance:' -or
-        $diagnostics -notmatch 'Installed file integrity:[\s\S]*PASS:') {
+        $diagnostics -notmatch 'Installed file integrity:[\s\S]*PASS:' -or
+        $diagnostics -notmatch 'Vulkan runtime: passed') {
         throw 'diagnostics did not verify package provenance and installed files'
     }
 

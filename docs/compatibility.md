@@ -75,7 +75,10 @@ user tokens, registry dumps, process lists, and arbitrary files.
 The x64 DirectML package additionally includes `Validate NeuralPass Hardware.cmd`.
 It runs the packaged model through DirectML and writes
 `NeuralPass-hardware-<device>.json` with adapter/driver metadata and the exact test
-result. Use an optional numeric argument to select a non-default DXGI adapter,
+result. Before installation, evidence is written below
+`%LOCALAPPDATA%\NeuralPass\Evidence` so the checksummed package remains immutable;
+after installation, it is written beside the game for diagnostics. The PowerShell
+validator also accepts `-OutputDirectory`. Use an optional numeric argument to select a non-default DXGI adapter,
 for example `Validate NeuralPass Hardware.cmd 1`. A passing report proves model
 execution on that machine; it does not substitute for a game soak test.
 
@@ -83,7 +86,8 @@ Both architectures include `Validate NeuralPass Vulkan.cmd`. It dynamically uses
 the installed Vulkan loader, executes the instrumented four-MRT capture plus an
 explicit-layout replacement-isolation test, and writes
 `NeuralPass-vulkan-runtime.json`. Exit code 77 means the loader or a physical Vulkan
-device is absent; a passing report is native driver evidence, not yet ReShade/game evidence.
+device is absent; a passing report is native driver evidence, not yet ReShade/game
+evidence. It follows the same evidence-location rule and accepts `-OutputDirectory`.
 
 ## Troubleshooting order
 

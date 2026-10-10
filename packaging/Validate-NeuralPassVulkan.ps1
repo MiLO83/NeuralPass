@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([string]$OutputDirectory)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -50,7 +50,23 @@ $evidence = [ordered]@{
     windows_display_adapters_unordered = $adapters
     output = $output
 }
-$report = Join-Path $root 'NeuralPass-vulkan-runtime.json'
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    if (Test-Path -LiteralPath (Join-Path $root 'PACKAGE.json') -PathType Leaf) {
+        $localData = [Environment]::GetFolderPath(
+            [Environment+SpecialFolder]::LocalApplicationData)
+        if ([string]::IsNullOrWhiteSpace($localData)) {
+            throw 'Could not resolve LocalAppData for the evidence report.'
+        }
+        $OutputDirectory = Join-Path $localData 'NeuralPass/Evidence'
+    } else {
+        # Installed validators live beside the game and diagnostics consume the
+        # report from there. An assembled package stays immutable after validation.
+        $OutputDirectory = $root
+    }
+}
+$OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
+[void](New-Item -ItemType Directory -Path $OutputDirectory -Force)
+$report = Join-Path $OutputDirectory 'NeuralPass-vulkan-runtime.json'
 $evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $report -Encoding UTF8
 $output | ForEach-Object { Write-Host $_ }
 Write-Host "Evidence report: $report"
