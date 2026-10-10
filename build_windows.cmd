@@ -170,6 +170,13 @@ if /I "%NP_MODE%"=="directml" (
         copy /Y "%NP_BUILD%\Release\NeuralPassWorker.exe" "%NP_DIST%\NeuralPassWorker.exe" >nul
         copy /Y "%NP_BUILD%\Release\neuralpass_onnx_smoke_tests.exe" "%NP_DIST%\NeuralPassHardwareTest.exe" >nul
     )
+    copy /Y "%NP_BUILD%\Release\neuralpass_worker_smoke_tests.exe" "%NP_DIST%\NeuralPassWorkerHealthTest.exe" >nul
+    if errorlevel 1 (
+        echo ERROR: The worker-health evidence runner was not produced.
+        goto :failed
+    )
+    copy /Y "%NP_ROOT%\packaging\Validate NeuralPass Worker.cmd" "%NP_DIST%\Validate NeuralPass Worker.cmd" >nul
+    copy /Y "%NP_ROOT%\packaging\Validate-NeuralPassWorker.ps1" "%NP_DIST%\Validate-NeuralPassWorker.ps1" >nul
     copy /Y "%NP_ROOT%\packaging\Validate NeuralPass Hardware.cmd" "%NP_DIST%\Validate NeuralPass Hardware.cmd" >nul
     copy /Y "%NP_ROOT%\packaging\Validate-NeuralPassHardware.ps1" "%NP_DIST%\Validate-NeuralPassHardware.ps1" >nul
     if not exist "%NP_DIST%\models\downloads" mkdir "%NP_DIST%\models\downloads"

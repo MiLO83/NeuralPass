@@ -148,6 +148,9 @@ LUID and passes that adapter index to DirectML instead of assuming adapter zero.
 The x64 DirectML package also includes `Validate NeuralPass Hardware.cmd`; run it
 outside the game to execute a finite-output model smoke test and write a shareable
 JSON evidence report. Pass a DXGI device index when testing a non-default adapter.
+Both DirectML packages include `Validate NeuralPass Worker.cmd`; it exercises the
+packaged client/worker transport, generation rollover, and forced worker restart.
+It defaults to DirectML and accepts `-Provider cpu` for transport-only validation.
 See [`docs/compatibility.md`](docs/compatibility.md) for the API support matrix,
 safety policy, diagnostics, and troubleshooting sequence.
 

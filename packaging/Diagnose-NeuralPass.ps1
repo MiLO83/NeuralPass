@@ -50,6 +50,7 @@ $names = @(
     'd3d10.dll', 'd3d11.dll', 'd3d12.dll', 'opengl32.dll', 'onnxruntime.dll',
     'onnxruntime_providers_shared.dll', 'DirectML.dll', 'NeuralPass.install.json',
     'NeuralPassWorker.exe', 'NeuralPassHardwareTest.exe', 'NeuralPass-hardware-0.json',
+    'NeuralPassWorkerHealthTest.exe', 'NeuralPass-worker-health.json',
     'NeuralPassVulkanTest.exe', 'NeuralPass-vulkan-runtime.json',
     'NeuralPass/PACKAGE.json', 'NeuralPass/SBOM.spdx.json', 'NeuralPass/SHA256SUMS.txt'
 )
@@ -105,6 +106,13 @@ if ($hardwareReport) {
         Add-Line "- $($hardwareReport.Name): passed $($hardware.passed); DirectML device $($hardware.directml_device_id); model $($hardware.model)"
     } catch { Add-Line "! unreadable hardware report: $($_.Exception.Message)" }
 } else { Add-Line '- no hardware validation report found' }
+$workerReport = Join-Path $target 'NeuralPass-worker-health.json'
+if (Test-Path -LiteralPath $workerReport -PathType Leaf) {
+    try {
+        $worker = Get-Content -LiteralPath $workerReport -Raw | ConvertFrom-Json
+        Add-Line "- Worker health: passed $($worker.passed); provider $($worker.provider); client $($worker.client_architecture); worker $($worker.worker_architecture); forced restart $($worker.validates_forced_restart)"
+    } catch { Add-Line "! unreadable worker-health report: $($_.Exception.Message)" }
+} else { Add-Line '- no worker-health validation report found' }
 $vulkanReport = Join-Path $target 'NeuralPass-vulkan-runtime.json'
 if (Test-Path -LiteralPath $vulkanReport -PathType Leaf) {
     try {

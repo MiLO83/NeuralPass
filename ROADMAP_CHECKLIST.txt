@@ -184,7 +184,8 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [~] Add adaptive frame-time/GPU-headroom control and worker crash recovery.
     Evidence: broken worker transports are restarted and retried once; x64 and
     x86-to-x64 integration suites force process exit during a request and prove a
-    fresh child completes the retried tile. Adaptive GPU-headroom control remains.
+    fresh child completes the retried tile. The same recovery workload ships as a
+    JSON-producing x64/x86 worker-health validator. Adaptive GPU-headroom control remains.
 [x] Pin model versions, licenses, and SHA-256 hashes.
     Evidence: schema-validated manifest pins four model URLs/versioned filenames,
     BSD-3-Clause licenses, and exact SHA-256 values; downloads fail closed.
@@ -220,7 +221,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     provider evidence, safety markers, and API/HDR/add-on evidence from ReShade logs.
     The lifecycle suite runs the installed Vulkan probe and requires diagnostics to
     consume its pass/no-ICD report; pre-install probes preserve package integrity by
-    writing below LocalAppData. Authoritative live HDR and worker-health probes remain.
+    writing below LocalAppData. It also runs the architecture-matched worker client,
+    forces x64 worker restart, and requires diagnostics to consume the resulting
+    health report. Authoritative live HDR probing remains.
 [x] Require explicit per-game activation.
     Evidence: the guided installer copies nothing until the user selects a game and
     types the exact activation phrase; isolated install/uninstall lifecycle passes.

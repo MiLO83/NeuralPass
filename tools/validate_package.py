@@ -166,12 +166,15 @@ def main() -> int:
         runtime = {"onnxruntime.dll", "onnxruntime_providers_shared.dll", "DirectML.dll",
                    "NeuralPassWorker.exe",
                    "NeuralPassHardwareTest.exe", "Validate NeuralPass Hardware.cmd",
-                   "Validate-NeuralPassHardware.ps1"}
+                   "Validate-NeuralPassHardware.ps1", "NeuralPassWorkerHealthTest.exe",
+                   "Validate NeuralPass Worker.cmd", "Validate-NeuralPassWorker.ps1"}
         absent = sorted(name for name in runtime if not (root / name).is_file())
         if absent:
             raise SystemExit("DirectML package is missing: " + ", ".join(absent))
         if pe_machine(root / "NeuralPassWorker.exe") != 0x8664:
             raise SystemExit("NeuralPassWorker.exe must be an x64 PE image")
+        if pe_machine(root / "NeuralPassWorkerHealthTest.exe") != expected_machine:
+            raise SystemExit("worker-health runner PE architecture does not match package")
         if not list((root / "models" / "downloads").glob("*.onnx")):
             raise SystemExit("DirectML package contains no ONNX model")
         notices = {

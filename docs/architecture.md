@@ -28,7 +28,10 @@ private 8 MiB file mapping carries exactly one float RGBA tile at a time. The
 add-on never passes handles or pointers across architectures. Width, height, and
 payload bounds are validated at both ends, and the response must echo the request,
 scene, style, and visible-binding generations. A disconnect causes one clean worker
-restart and retry. The ordinary x64 add-on retains its in-process ONNX path.
+restart and retry. The packaged worker-health runner performs inference, rolls the
+generation tuple, deliberately terminates the child during a request, and requires
+the restarted worker to complete the retry. Its x86 build talks to the same packaged
+x64 worker used by Win32 games. The ordinary x64 add-on retains its in-process ONNX path.
 
 Persistent storage is rooted below a game-build identity derived from the host
 executable name, size, and modification timestamp. Scene manifests live beneath

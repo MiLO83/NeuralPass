@@ -65,7 +65,7 @@ Run `Diagnose NeuralPass.cmd` beside the game executable. It creates
 - package provenance, SPDX SBOM, checksums, and installation-manifest presence;
 - installed-file integrity against hashes captured during installation;
 - proxy-derived API candidates and runtime API/HDR evidence from `ReShade.log`;
-- the latest packaged DirectML hardware/provider result, when available;
+- the latest packaged DirectML hardware/provider and worker-health results, when available;
 - known safety markers at the game root; and
 - the last 120 lines of `ReShade.log` when available.
 
@@ -88,6 +88,13 @@ explicit-layout replacement-isolation test, and writes
 `NeuralPass-vulkan-runtime.json`. Exit code 77 means the loader or a physical Vulkan
 device is absent; a passing report is native driver evidence, not yet ReShade/game
 evidence. It follows the same evidence-location rule and accepts `-OutputDirectory`.
+
+Both DirectML packages include `Validate NeuralPass Worker.cmd`. It validates the
+named-pipe/shared-memory inference path, generation rollover, forced child exit,
+and automatic restart, then writes `NeuralPass-worker-health.json`. The x86 package
+uses an x86 evidence client with the packaged x64 worker. DirectML is the default;
+pass `-Provider cpu` to isolate transport and recovery from GPU-provider health.
+Its report follows the same pre-install and installed evidence-location rule.
 
 ## Troubleshooting order
 

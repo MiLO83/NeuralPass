@@ -37,11 +37,34 @@ try {
         throw 'installed Vulkan evidence does not classify its exit status correctly'
     }
 
+    $workerValidator = Join-Path $game 'Validate-NeuralPassWorker.ps1'
+    $workerProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$workerValidator`"",
+        '-Provider', 'cpu') -Wait -PassThru -NoNewWindow
+    if ($workerProcess.ExitCode -ne 0) {
+        throw "installed worker-health validator failed with exit code $($workerProcess.ExitCode)"
+    }
+    $workerReportPath = Join-Path $game 'NeuralPass-worker-health.json'
+    if (-not (Test-Path -LiteralPath $workerReportPath -PathType Leaf)) {
+        throw 'installed worker-health validator did not write evidence beside the game'
+    }
+    $workerReport = Get-Content -LiteralPath $workerReportPath -Raw | ConvertFrom-Json
+    $expectedClientArchitecture = if ($manifest.package.architecture -eq 'windows-x86') {
+        'X86'
+    } else { 'X64' }
+    if (-not $workerReport.passed -or $workerReport.provider -ne 'cpu' -or
+        -not $workerReport.validates_forced_restart -or
+        $workerReport.client_architecture -ne $expectedClientArchitecture -or
+        $workerReport.worker_architecture -ne 'X64') {
+        throw 'installed worker-health evidence has invalid architecture or recovery data'
+    }
+
     & (Join-Path $packageRoot 'Diagnose-NeuralPass.ps1') -TargetPath $game
     $diagnostics = Get-Content -LiteralPath (Join-Path $game 'NeuralPass-diagnostics.txt') -Raw
     if ($diagnostics -notmatch 'Package provenance:' -or
         $diagnostics -notmatch 'Installed file integrity:[\s\S]*PASS:' -or
-        $diagnostics -notmatch 'Vulkan runtime: passed') {
+        $diagnostics -notmatch 'Vulkan runtime: passed' -or
+        $diagnostics -notmatch 'Worker health: passed True') {
         throw 'diagnostics did not verify package provenance and installed files'
     }
 
