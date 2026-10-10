@@ -18,6 +18,7 @@ struct TileJob {
     Rect core;
     Rect padded;
     float dirty_fraction = 0.0f;
+    float urgent_fraction = 0.0f;
     float score = 0.0f;
     bool refresh_only = false;
 };
@@ -28,6 +29,7 @@ struct TileJob {
 [[nodiscard]] std::vector<TileJob> schedule_tiles(
     const Image<std::uint8_t> &dirty,
     const Image<std::uint16_t> &age,
-    const TileSettings &settings);
+    const TileSettings &settings,
+    const Image<std::uint8_t> *urgent = nullptr);
 
 } // namespace neuralpass

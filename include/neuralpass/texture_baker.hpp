@@ -141,11 +141,21 @@ struct MaterialTextureBakeStats {
     bool stale = false;
 };
 
+enum class TextureRevealClass : std::uint8_t {
+    unknown,
+    first_observation,
+    newly_visible,
+};
+
 struct MaterialTextureBakePlan {
     // Known material texels projected over the live framebuffer. Newly exposed
     // pixels intentionally retain the live color until an inpaint result lands.
     Image<Color> composite;
+    // The union remains the strict commit boundary. The two disjoint masks
+    // distinguish initial styling from later reveal inpainting and scheduling.
     Image<std::uint8_t> reveal_mask;
+    Image<std::uint8_t> first_observation_mask;
+    Image<std::uint8_t> inpaint_mask;
     // Inference output alpha is not authoritative. Keep the live framebuffer
     // alpha alongside the request so generated texels cannot alter cutouts.
     Image<float> source_alpha;
@@ -153,6 +163,8 @@ struct MaterialTextureBakePlan {
     std::uint64_t epoch = 0;
     std::size_t known_pixels = 0;
     std::size_t revealed_pixels = 0;
+    std::size_t first_observation_pixels = 0;
+    std::size_t inpaint_pixels = 0;
 };
 
 struct AtlasCacheStats {
@@ -173,7 +185,8 @@ public:
         std::span<const SurfaceCorrespondence> correspondence);
     [[nodiscard]] MaterialTextureBakePlan plan(
         const Image<Color> &live_frame,
-        std::span<const SurfaceCorrespondence> correspondence) const;
+        std::span<const SurfaceCorrespondence> correspondence,
+        const Image<TextureRevealClass> *reveal_classes = nullptr) const;
     [[nodiscard]] MaterialTextureBakeStats commit(
         const MaterialTextureBakePlan &plan,
         const Image<Color> &inpainted_frame,

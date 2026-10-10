@@ -344,10 +344,14 @@ files. Camera cuts only bump the in-flight epoch and do not touch this store.
 
 The live material path is a two-phase operation. `plan` reprojects every
 covered atlas sample into the current framebuffer and emits a reveal mask only
-for visible, depth-verified UVs without real coverage. Neural inpainting uses
-that mask plus a context halo. `commit` accepts pixels only from the original
-reveal mask, so ordinary camera motion never restyles established material
-texels and unsupported pixels remain on the live screen-space fallback.
+for visible, depth-verified UVs without real coverage. That boundary is split
+into disjoint first-observation and newly-visible masks using the live visibility
+classification. Neural work uses the masks plus a context halo, and later
+disocclusion/front-face/off-screen reveals preempt bulk initial styling when the
+tile budget is constrained. `commit` verifies that the two masks are disjoint and
+their union exactly matches the original reveal boundary before accepting any
+pixel, so ordinary camera motion never restyles established material texels and
+unsupported pixels remain on the live screen-space fallback.
 
 Every asynchronous plan carries both a baker epoch and scene key. An image-space
 cut bumps the epoch immediately, resets optical-flow/temporal history, and

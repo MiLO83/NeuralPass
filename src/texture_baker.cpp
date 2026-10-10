@@ -379,10 +379,18 @@ MaterialTextureBakeStats MaterialTextureBaker::update(
 
 MaterialTextureBakePlan MaterialTextureBaker::plan(
     const Image<Color> &live_frame,
-    std::span<const SurfaceCorrespondence> correspondence) const {
+    std::span<const SurfaceCorrespondence> correspondence,
+    const Image<TextureRevealClass> *reveal_classes) const {
+    if (reveal_classes != nullptr &&
+        (reveal_classes->width() != live_frame.width() ||
+         reveal_classes->height() != live_frame.height()))
+        throw std::invalid_argument("reveal classes and live frame must have equal dimensions");
     MaterialTextureBakePlan result;
     result.composite = live_frame;
     result.reveal_mask = Image<std::uint8_t>(live_frame.width(), live_frame.height(), 0);
+    result.first_observation_mask = Image<std::uint8_t>(
+        live_frame.width(), live_frame.height(), 0);
+    result.inpaint_mask = Image<std::uint8_t>(live_frame.width(), live_frame.height(), 0);
     result.source_alpha = Image<float>(live_frame.width(), live_frame.height(), 1.0f);
     result.live_frame = live_frame;
     for (std::size_t index = 0; index < live_frame.size(); ++index)
@@ -401,6 +409,20 @@ MaterialTextureBakePlan MaterialTextureBaker::plan(
         } else if (result.reveal_mask.at(sample.screen_x, sample.screen_y) == 0) {
             result.reveal_mask.at(sample.screen_x, sample.screen_y) = 255;
             ++result.revealed_pixels;
+            auto reveal_class = TextureRevealClass::unknown;
+            if (reveal_classes != nullptr)
+                reveal_class = reveal_classes->at(sample.screen_x, sample.screen_y);
+            if (reveal_class == TextureRevealClass::unknown)
+                reveal_class = found == atlases_.end()
+                    ? TextureRevealClass::first_observation
+                    : TextureRevealClass::newly_visible;
+            if (reveal_class == TextureRevealClass::first_observation) {
+                result.first_observation_mask.at(sample.screen_x, sample.screen_y) = 255;
+                ++result.first_observation_pixels;
+            } else {
+                result.inpaint_mask.at(sample.screen_x, sample.screen_y) = 255;
+                ++result.inpaint_pixels;
+            }
         }
     }
     return result;
@@ -414,12 +436,25 @@ MaterialTextureBakeStats MaterialTextureBaker::commit(
     stats.submitted = correspondence.size();
     if (plan.epoch != epoch_ || plan.reveal_mask.width() != inpainted_frame.width() ||
         plan.reveal_mask.height() != inpainted_frame.height() ||
+        plan.first_observation_mask.width() != inpainted_frame.width() ||
+        plan.first_observation_mask.height() != inpainted_frame.height() ||
+        plan.inpaint_mask.width() != inpainted_frame.width() ||
+        plan.inpaint_mask.height() != inpainted_frame.height() ||
         plan.source_alpha.width() != inpainted_frame.width() ||
         plan.source_alpha.height() != inpainted_frame.height() ||
         plan.live_frame.width() != inpainted_frame.width() ||
         plan.live_frame.height() != inpainted_frame.height()) {
         stats.stale = true;
         return stats;
+    }
+    for (std::size_t index = 0; index < plan.reveal_mask.size(); ++index) {
+        const bool reveal = plan.reveal_mask.pixels()[index] != 0;
+        const bool first = plan.first_observation_mask.pixels()[index] != 0;
+        const bool inpaint = plan.inpaint_mask.pixels()[index] != 0;
+        if ((first && inpaint) || reveal != (first || inpaint)) {
+            stats.stale = true;
+            return stats;
+        }
     }
     std::unordered_set<std::uint64_t> touched;
     for (const auto &sample : correspondence) {

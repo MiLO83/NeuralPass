@@ -1774,11 +1774,25 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             neuralpass::is_camera_cut(current, cut_reference);
         previous_scene = current;
         std::vector<neuralpass::SurfaceCorrespondence> correspondence;
+        std::optional<Image<neuralpass::TextureRevealClass>> reveal_classes;
         if (surface && surface->width() == frame.width && surface->height() == frame.height) {
             const auto visibility = neuralpass::classify_visibility(
                 *surface, visual_cut || !previous_surface ? nullptr : &*previous_surface, nullptr);
             for (std::size_t index = 0; index < visibility.counts.size(); ++index)
                 state->visibility_counts[index] = visibility.counts[index];
+            reveal_classes.emplace(frame.width, frame.height,
+                                   neuralpass::TextureRevealClass::unknown);
+            for (std::size_t index = 0; index < visibility.pixels.size(); ++index) {
+                const auto value = visibility.pixels.pixels()[index];
+                if (value == neuralpass::VisibilityClass::first_observation)
+                    reveal_classes->pixels()[index] =
+                        neuralpass::TextureRevealClass::first_observation;
+                else if (value == neuralpass::VisibilityClass::disoccluded ||
+                         value == neuralpass::VisibilityClass::newly_front_facing ||
+                         value == neuralpass::VisibilityClass::offscreen_entry)
+                    reveal_classes->pixels()[index] =
+                        neuralpass::TextureRevealClass::newly_visible;
+            }
             correspondence = surface->correspondences();
             previous_surface = std::move(surface);
         } else {
@@ -1844,7 +1858,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         state->scene_transition = static_cast<int>(transition);
         state->scene_generation = scene_transitions.scene_key().generation;
         if (active_stream) {
-            auto current_plan = material_baker.plan(current, correspondence);
+            auto current_plan = material_baker.plan(
+                current, correspondence, reveal_classes ? &*reveal_classes : nullptr);
             publish_replacement_snapshots(
                 *state, material_baker, correspondence, published_replacements, false);
             const auto seeded = pack(current_plan.composite);
@@ -1968,7 +1983,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
             history = std::move(temporal.reprojected);
         }
 
-        const auto bake_plan = material_baker.plan(current, correspondence);
+        const auto bake_plan = material_baker.plan(
+            current, correspondence, reveal_classes ? &*reveal_classes : nullptr);
         publish_replacement_snapshots(
             *state, material_baker, correspondence, published_replacements, false);
         for (const auto &sample : correspondence) {
@@ -1988,7 +2004,8 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         const auto jobs = neuralpass::schedule_tiles(dirty, history.age,
             {.tile_size=256, .halo=32, .dilation_radius=4,
              .tile_budget=state->tile_budget.load(),
-             .refresh_age=static_cast<std::uint16_t>(state->refresh_age.load())});
+             .refresh_age=static_cast<std::uint16_t>(state->refresh_age.load())},
+            &bake_plan.inpaint_mask);
 
         // The cross-architecture worker echoes all four identity dimensions.
         // A mismatched response can never be committed as a plausible tile.

@@ -98,6 +98,23 @@ static void test_age_refresh() {
             "aged tile was not refreshed");
 }
 
+static void test_newly_visible_tiles_preempt_initial_styling() {
+    Image<std::uint8_t> dirty(512, 256, 0);
+    Image<std::uint8_t> newly_visible(512, 256, 0);
+    Image<std::uint16_t> age(512, 256, 0);
+    for (std::uint32_t y = 0; y < 256; ++y)
+        for (std::uint32_t x = 0; x < 192; ++x)
+            dirty.at(x, y) = 1;
+    dirty.at(400, 100) = 1;
+    newly_visible.at(400, 100) = 1;
+    const auto jobs = schedule_tiles(dirty, age,
+        {.tile_size=256, .halo=32, .dilation_radius=0,
+         .tile_budget=1, .refresh_age=120}, &newly_visible);
+    require(jobs.size() == 1 && jobs[0].core.x == 256 &&
+            jobs[0].urgent_fraction > 0.0f,
+            "newly visible inpaint did not preempt bulk first-observation styling");
+}
+
 static void test_preview_backend_is_bounded() {
     auto backend = make_preview_backend("photo-detail");
     Image<Color> image(3, 3, {0.5f, 0.5f, 0.5f, 1.0f});
@@ -483,8 +500,40 @@ static void test_baker_plans_only_newly_revealed_texels_and_rejects_cut_results(
 
     const auto initial_plan = baker.plan(first, mapping);
     require(initial_plan.known_pixels == 0 && initial_plan.revealed_pixels == 2 &&
-            initial_plan.reveal_mask.at(0, 0) == 255 && initial_plan.reveal_mask.at(1, 0) == 255,
+            initial_plan.first_observation_pixels == 2 && initial_plan.inpaint_pixels == 0 &&
+            initial_plan.reveal_mask.at(0, 0) == 255 &&
+            initial_plan.reveal_mask.at(1, 0) == 255 &&
+            initial_plan.first_observation_mask.at(0, 0) == 255 &&
+            initial_plan.first_observation_mask.at(1, 0) == 255 &&
+            initial_plan.inpaint_mask.at(0, 0) == 0,
             "initial bake plan did not expose only missing material texels");
+
+    MaterialTextureBaker classified_baker({.atlas_width=16, .atlas_height=8});
+    Image<TextureRevealClass> causes(2, 1, TextureRevealClass::unknown);
+    causes.at(0, 0) = TextureRevealClass::first_observation;
+    causes.at(1, 0) = TextureRevealClass::newly_visible;
+    const auto classified_plan = classified_baker.plan(first, mapping, &causes);
+    require(classified_plan.first_observation_pixels == 1 &&
+            classified_plan.inpaint_pixels == 1 &&
+            classified_plan.first_observation_mask.at(0, 0) == 255 &&
+            classified_plan.first_observation_mask.at(1, 0) == 0 &&
+            classified_plan.inpaint_mask.at(0, 0) == 0 &&
+            classified_plan.inpaint_mask.at(1, 0) == 255,
+            "visibility causes were not separated into styling and inpaint masks");
+    auto invalid_plan = classified_plan;
+    invalid_plan.inpaint_mask.at(0, 0) = 255;
+    require(classified_baker.commit(invalid_plan, first, mapping).stale &&
+            classified_baker.material_count() == 0,
+            "overlapping reveal masks were accepted as a valid inference result");
+    bool rejected_cause_dimensions = false;
+    try {
+        Image<TextureRevealClass> wrong_size(1, 1, TextureRevealClass::first_observation);
+        (void)classified_baker.plan(first, mapping, &wrong_size);
+    } catch (const std::invalid_argument &) {
+        rejected_cause_dimensions = true;
+    }
+    require(rejected_cause_dimensions,
+            "mismatched reveal classification dimensions were silently accepted");
     const auto initial_commit = baker.commit(initial_plan, first, mapping);
     require(initial_commit.accepted == 2 && !initial_commit.stale,
             "initial revealed texels were not committed");
@@ -699,8 +748,11 @@ static void test_same_scene_camera_cut_preserves_atlas_and_reveals_new_uvs() {
     baker.invalidate_in_flight();
     const auto changed_plan = baker.plan(styled, changed_angle);
     require(changed_plan.known_pixels == 1 && changed_plan.revealed_pixels == 1 &&
+            changed_plan.first_observation_pixels == 0 &&
+            changed_plan.inpaint_pixels == 1 &&
             changed_plan.reveal_mask.at(0, 0) == 0 &&
-            changed_plan.reveal_mask.at(1, 0) == 255,
+            changed_plan.reveal_mask.at(1, 0) == 255 &&
+            changed_plan.inpaint_mask.at(1, 0) == 255,
             "camera cut did not preserve known UVs and reveal only the new angle");
     require(baker.commit(changed_plan, styled, changed_angle).accepted == 1,
             "newly visible same-scene UV was not accepted after a camera cut");
@@ -863,6 +915,7 @@ int main() {
         test_motion_reprojects_previous_pixel();
         test_dilation_and_priority();
         test_age_refresh();
+        test_newly_visible_tiles_preempt_initial_styling();
         test_preview_backend_is_bounded();
         test_hdr_color_contract_is_bounded_and_luminance_stable();
         test_runtime_display_evidence_json_is_exact_and_escaped();

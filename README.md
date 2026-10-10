@@ -291,8 +291,10 @@ disoccluded, newly front-facing, off-screen entry, first observation, or
 unsupported and reports the current counts in the overlay. A camera cut passes
 no previous surface to the classifier, so the new view becomes direct
 first-observation evidence while the reveal-only atlas planner still schedules
-its uncovered UVs. Missing capture frames break the comparison chain rather
-than reprojecting across an unknown gap.
+its uncovered UVs. First-observation styling and later reveal inpainting use
+disjoint commit-validated masks; newly visible work receives tile priority so a
+small reveal is not starved by a larger initial screen restyle. Missing capture
+frames break the comparison chain rather than reprojecting across an unknown gap.
 
 D3D9 has a separate Shader Model 3 token/reflection and legacy draw path. It
 captures direct/indexed UVs and replaces lockable 32-bit color textures, but its

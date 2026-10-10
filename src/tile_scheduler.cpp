@@ -31,25 +31,35 @@ Image<std::uint8_t> dilate_mask(const Image<std::uint8_t> &mask, std::uint32_t r
 
 std::vector<TileJob> schedule_tiles(const Image<std::uint8_t> &input_dirty,
                                     const Image<std::uint16_t> &age,
-                                    const TileSettings &settings) {
+                                    const TileSettings &settings,
+                                    const Image<std::uint8_t> *input_urgent) {
     if (settings.tile_size == 0)
         throw std::invalid_argument("tile_size must be non-zero");
     if (age.width() != input_dirty.width() || age.height() != input_dirty.height())
         throw std::invalid_argument("age and dirty images must have equal dimensions");
+    if (input_urgent != nullptr &&
+        (input_urgent->width() != input_dirty.width() ||
+         input_urgent->height() != input_dirty.height()))
+        throw std::invalid_argument("urgent and dirty images must have equal dimensions");
     if (input_dirty.empty() || settings.tile_budget == 0)
         return {};
 
     const auto dirty = dilate_mask(input_dirty, settings.dilation_radius);
+    const auto urgent = input_urgent != nullptr
+        ? dilate_mask(*input_urgent, settings.dilation_radius)
+        : Image<std::uint8_t>(input_dirty.width(), input_dirty.height(), 0);
     std::vector<TileJob> jobs;
     for (std::uint32_t y = 0; y < dirty.height(); y += settings.tile_size) {
         for (std::uint32_t x = 0; x < dirty.width(); x += settings.tile_size) {
             const auto w = std::min(settings.tile_size, dirty.width() - x);
             const auto h = std::min(settings.tile_size, dirty.height() - y);
             std::uint64_t dirty_count = 0;
+            std::uint64_t urgent_count = 0;
             std::uint16_t oldest = 0;
             for (std::uint32_t py = y; py < y + h; ++py)
                 for (std::uint32_t px = x; px < x + w; ++px) {
                     dirty_count += dirty.at(px, py) != 0;
+                    urgent_count += urgent.at(px, py) != 0;
                     oldest = std::max(oldest, age.at(px, py));
                 }
             const bool refresh = dirty_count == 0 && oldest >= settings.refresh_age;
@@ -57,6 +67,8 @@ std::vector<TileJob> schedule_tiles(const Image<std::uint8_t> &input_dirty,
                 continue;
 
             const float fraction = static_cast<float>(dirty_count) / static_cast<float>(w * h);
+            const float urgent_fraction = static_cast<float>(urgent_count) /
+                static_cast<float>(w * h);
             const float cx = static_cast<float>(x) + static_cast<float>(w) * 0.5f;
             const float cy = static_cast<float>(y) + static_cast<float>(h) * 0.5f;
             const float nx = (cx / static_cast<float>(dirty.width())) - 0.5f;
@@ -72,7 +84,10 @@ std::vector<TileJob> schedule_tiles(const Image<std::uint8_t> &input_dirty,
                 {x, y, w, h},
                 {left, top, right - left, bottom - top},
                 fraction,
-                fraction * 10000.0f + center * 100.0f + age_score * 10.0f,
+                urgent_fraction,
+                (urgent_count != 0 ? 1.0e9f : 0.0f) +
+                    urgent_fraction * 100000.0f + fraction * 10000.0f +
+                    center * 100.0f + age_score * 10.0f,
                 refresh});
         }
     }

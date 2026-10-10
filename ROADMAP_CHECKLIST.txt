@@ -189,7 +189,11 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [ ] Add optional CUDA acceleration.
 [!] Restore and verify the current StreamDiffusion environment.
     Blocker: the moved WSL environment is missing torch and onnxruntime packages.
-[ ] Separate first-observation styling and newly-visible inpainting masks.
+[x] Separate first-observation styling and newly-visible inpainting masks.
+    Evidence: visibility causes now feed two disjoint masks whose union is the only
+    commit-authorized reveal set. Newly disoccluded/front-facing/off-screen texels
+    receive an explicit urgent scheduling lane ahead of bulk first-observation work;
+    core tests prove mask separation, reject overlap/tampering, and verify preemption.
 [ ] Add global prompt and per-binding controls.
 [~] Add adaptive frame-time/GPU-headroom control and worker crash recovery.
     Evidence: broken worker transports are restarted and retried once; x64 and
