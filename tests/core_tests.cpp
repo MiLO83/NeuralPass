@@ -620,6 +620,60 @@ static void test_scene_transition_preserves_camera_cuts_and_confirms_new_scenes(
             "explicit scene reset did not advance the scene generation");
 }
 
+static void test_scene_transition_combines_material_uv_depth_and_color_evidence() {
+    const auto sample = [](std::uint64_t material, float u, float depth,
+                           Color source) {
+        SurfaceCorrespondence result;
+        result.material_id = material;
+        result.u = u;
+        result.v = u;
+        result.confidence = 1.0f;
+        result.framebuffer_depth = depth;
+        result.hit_depth = depth;
+        result.source_r = source.r;
+        result.source_g = source.g;
+        result.source_b = source.b;
+        result.source_a = source.a;
+        return result;
+    };
+
+    const auto original = sample(7001, 0.1f, 0.2f, {0.8f, 0.1f, 0.1f, 1.0f});
+    const auto corroborated = sample(7001, 0.8f, 0.8f, {0.8f, 0.1f, 0.1f, 1.0f});
+    SceneTransitionTracker same_binding;
+    require(same_binding.observe(false, std::span(&original, 1)) == SceneTransition::stable &&
+            same_binding.observe(true, std::span(&corroborated, 1)) ==
+                SceneTransition::camera_cut,
+            "source-color evidence did not preserve a one-material camera cut");
+
+    const auto conflicting = sample(7001, 0.8f, 0.8f, {0.1f, 0.1f, 0.8f, 1.0f});
+    SceneTransitionTracker reused_binding;
+    require(reused_binding.observe(false, std::span(&original, 1)) == SceneTransition::stable &&
+            reused_binding.observe(true, std::span(&conflicting, 1)) ==
+                SceneTransition::pending_scene_change,
+            "a reused material identity overrode conflicting UV/depth/color evidence");
+
+    const std::array<SurfaceCorrespondence, 2> original_pair {{
+        sample(7101, 0.1f, 0.2f, {0.8f, 0.1f, 0.1f, 1.0f}),
+        sample(7102, 0.2f, 0.3f, {0.1f, 0.8f, 0.1f, 1.0f}),
+    }};
+    const std::array<SurfaceCorrespondence, 2> moved_pair {{
+        sample(7101, 0.7f, 0.8f, {0.1f, 0.1f, 0.8f, 1.0f}),
+        sample(7102, 0.8f, 0.9f, {0.7f, 0.7f, 0.1f, 1.0f}),
+    }};
+    SceneTransitionTracker strong_geometry;
+    require(strong_geometry.observe(false, original_pair) == SceneTransition::stable &&
+            strong_geometry.observe(true, moved_pair) == SceneTransition::camera_cut,
+            "multiple stable binding/material/geometry identities did not preserve the scene");
+
+    const SurfaceCorrespondence legacy {0, 0, 7201, 0.2f, 0.2f, 1.0f};
+    SceneTransitionTracker optional_channels;
+    require(optional_channels.observe(false, std::span(&legacy, 1)) ==
+                SceneTransition::stable &&
+            optional_channels.observe(true, std::span(&legacy, 1)) ==
+                SceneTransition::camera_cut,
+            "missing optional scene evidence did not retain conservative compatibility");
+}
+
 static void test_same_scene_camera_cut_preserves_atlas_and_reveals_new_uvs() {
     MaterialTextureBaker baker({.atlas_width=32, .atlas_height=16});
     SceneTransitionTracker tracker({.material_overlap_threshold=0.25f,
@@ -827,6 +881,7 @@ int main() {
         test_inpaint_provenance_alpha_and_direct_observation_supersession();
         test_surface_capture_compacts_backend_neutral_pixels();
         test_scene_transition_preserves_camera_cuts_and_confirms_new_scenes();
+        test_scene_transition_combines_material_uv_depth_and_color_evidence();
         test_same_scene_camera_cut_preserves_atlas_and_reveals_new_uvs();
         test_pending_scene_quarantine_cannot_commit_texture_data();
         test_atlas_cache_round_trip_and_rejects_corruption();

@@ -351,9 +351,11 @@ texels and unsupported pixels remain on the live screen-space fallback.
 
 Every asynchronous plan carries both a baker epoch and scene key. An image-space
 cut bumps the epoch immediately, resets optical-flow/temporal history, and
-rejects older in-flight results. Binding overlap then classifies the transition
-with hysteresis: shared identities mean a camera cut; foreign identities enter
-quarantine and may not read or mutate either scene. Several confirming frames
-switch to a checksummed persistent scene namespace. If geometry capture is
-missing, the conservative behavior is to reset screen history and preserve the
-current texture namespace.
+rejects older in-flight results. A bounded scene profile then classifies the
+transition with hysteresis. Its canonical material IDs already encode pipeline,
+descriptor binding, source content, and immutable geometry; weak identity overlap
+must also agree in quantized UV occupancy, paired capture/hit depth, and sampled
+source color. Conflicting evidence enters quarantine and may not read or mutate
+either scene. Several confirming frames switch to a checksummed persistent scene
+namespace. Missing optional UV/depth/color evidence is omitted and renormalized,
+so older adapters remain conservative instead of inventing a mismatch.

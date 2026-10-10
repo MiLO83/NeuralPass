@@ -27,7 +27,13 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     Evidence: pending-scene transition/recovery tests and Windows add-on build.
 [x] Preserve atlases across same-scene camera cuts and bake newly visible UVs.
     Evidence: dedicated camera-cut atlas/reveal test and Windows add-on build.
-[ ] Combine binding, material, geometry, UV, depth, and color evidence for scene identity.
+[x] Combine binding, material, geometry, UV, depth, and color evidence for scene identity.
+    Evidence: the bounded cross-API scene profile starts from canonical material IDs
+    (which include pipeline, descriptor binding, source content, and immutable geometry),
+    then corroborates weak overlap with quantized UV occupancy, paired capture/hit
+    depth, and source-texture color. Core tests prove agreement preserves a one-material
+    camera cut, conflicting auxiliary evidence enters quarantine, strong multi-identity
+    overlap survives viewpoint changes, and missing optional channels remain conservative.
 [~] Capture UV gradients, linear depth, motion, and confidence for every supported adapter.
     Evidence: D3D11 captures UV gradients/confidence plus equal-tested device depth
     and passes WARP; view-space linearization, motion, and other adapters remain.

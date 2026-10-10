@@ -75,10 +75,15 @@ struct SceneKey {
 
 struct SceneTransitionSettings {
     float material_overlap_threshold = 0.10f;
+    // A cut with several strongly overlapping binding/material/geometry keys is
+    // accepted directly. Weaker overlap must also agree in UV/depth/color space.
+    float strong_material_overlap_threshold = 0.75f;
+    float composite_evidence_threshold = 0.60f;
     std::uint32_t scene_change_confirmation_frames = 3;
 };
 
-// Combines an immediate image-space cut signal with stable material identity.
+// Combines an immediate image-space cut signal with canonical material identity
+// and bounded UV/depth/source-color evidence.
 // Every visual cut invalidates temporal reprojection. Foreign cuts enter a
 // quarantined pending state so observations cannot contaminate either scene;
 // the cache is replaced only after multiple frames confirm a new identity.
@@ -99,11 +104,24 @@ public:
     void reset();
 
 private:
-    [[nodiscard]] float overlap(const std::unordered_set<std::uint64_t> &visible) const;
+    struct EvidenceProfile {
+        std::unordered_set<std::uint64_t> materials;
+        std::unordered_set<std::uint64_t> uv;
+        std::unordered_set<std::uint64_t> depth;
+        std::unordered_set<std::uint64_t> color;
+
+        [[nodiscard]] bool empty() const noexcept { return materials.empty(); }
+        void clear() noexcept;
+    };
+
+    [[nodiscard]] static EvidenceProfile profile(
+        std::span<const SurfaceCorrespondence> correspondence);
+    static void merge(EvidenceProfile &destination, const EvidenceProfile &source);
+    [[nodiscard]] bool related(const EvidenceProfile &visible) const;
 
     SceneTransitionSettings settings_;
-    std::unordered_set<std::uint64_t> scene_materials_;
-    std::unordered_set<std::uint64_t> candidate_materials_;
+    EvidenceProfile scene_evidence_;
+    EvidenceProfile candidate_evidence_;
     std::uint32_t foreign_frames_ = 0;
     SceneKey scene_key_;
 };
