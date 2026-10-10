@@ -95,4 +95,13 @@ bool is_camera_cut(const Image<Color> &current, const HistoryFrame &previous,
     return static_cast<float>(rejected) / static_cast<float>(current.size()) >= rejected_fraction;
 }
 
+bool should_reset_screen_history(const Image<Color> &current,
+                                 const HistoryFrame &previous,
+                                 bool visual_cut,
+                                 bool previous_visual_cut,
+                                 bool sticky_history) noexcept {
+    return !same_size(current, previous.source) ||
+        (visual_cut && (!sticky_history || !previous_visual_cut));
+}
+
 } // namespace neuralpass

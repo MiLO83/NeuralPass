@@ -178,6 +178,25 @@ static void test_adaptive_budget_rejects_invalid_configuration() {
     require(rejected, "inverted adaptive-budget bounds were accepted");
 }
 
+static void test_sticky_screen_history_survives_paced_camera_cuts() {
+    Image<Color> current(512, 256, {1.0f, 1.0f, 1.0f, 1.0f});
+    HistoryFrame previous;
+    previous.source = Image<Color>(512, 256, {0.0f, 0.0f, 0.0f, 1.0f});
+
+    require(is_camera_cut(current, previous),
+            "paced full-frame change was not recognized as a camera cut");
+    require(should_reset_screen_history(current, previous, true, false, true),
+            "sticky history retained stale output on the first camera cut");
+    require(!should_reset_screen_history(current, previous, true, true, true),
+            "sticky history restarted progressive tiles during sustained motion");
+    require(should_reset_screen_history(current, previous, true, true, false),
+            "non-sticky history survived a camera cut");
+
+    Image<Color> resized(640, 360, {});
+    require(should_reset_screen_history(resized, previous, false, false, true),
+            "sticky history survived a resolution change");
+}
+
 static void test_binding_style_controls_filter_blend_and_isolate_identity() {
     std::vector<SurfaceCorrespondence> samples {
         {.screen_x=0, .screen_y=0, .material_id=11},
@@ -1300,6 +1319,7 @@ int main() {
         test_newly_visible_tiles_preempt_initial_styling();
         test_adaptive_budget_sheds_pressure_and_recovers_slowly();
         test_adaptive_budget_rejects_invalid_configuration();
+        test_sticky_screen_history_survives_paced_camera_cuts();
         test_binding_style_controls_filter_blend_and_isolate_identity();
         test_preview_backend_is_bounded();
         test_hdr_color_contract_is_bounded_and_luminance_stable();

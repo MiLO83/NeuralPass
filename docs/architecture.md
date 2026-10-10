@@ -110,8 +110,12 @@ screen gradients, linear framebuffer depth, ray-hit depth, and confidence.
 Samples are accepted only when the depths agree. Gradient-bearing samples use
 a bounded elliptical footprint; adapters without gradients use a bilinear
 fallback. An observed texel is immutable; an inpainted texel may be replaced
-later by a real observation. Camera cuts clear screen-space history but retain
-the current scene atlas; confirmed new scenes switch to an isolated namespace.
+later by a real observation. Effect-environment recreation clears screen-space
+history so loading-screen pixels cannot leak into gameplay. With sticky history
+enabled, the first visual cut also clears that history, while repeated cut
+classification during sustained paced camera motion is latched so progressive
+tiles can converge. The current scene atlas survives camera cuts; confirmed new
+scenes switch to an isolated namespace.
 
 `MaterialTextureBaker` owns the scene's lazily-created atlas set. Capture
 adapters submit only trustworthy sparse correspondences; missing materials,

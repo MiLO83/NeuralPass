@@ -1900,6 +1900,7 @@ void process_frames(RuntimeState *state, std::stop_token token) {
     std::uint64_t style_generation = 1;
     neuralpass::AdaptiveTileBudgetController budget_controller;
     bool adaptive_was_enabled = true;
+    bool previous_visual_cut = false;
 
     while (!token.stop_requested()) {
         CapturedFrame frame;
@@ -2239,8 +2240,9 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         }
         if (state->reset_requested.exchange(false)) history = {};
         const bool sticky_history = state->sticky_history.load();
-        const bool reset = history.source.width() != frame.width ||
-                           history.source.height() != frame.height || visual_cut;
+        const bool reset = neuralpass::should_reset_screen_history(
+            current, history, visual_cut, previous_visual_cut, sticky_history);
+        previous_visual_cut = visual_cut;
         if (reset) {
             history.source = current;
             history.styled = current;
@@ -2404,6 +2406,15 @@ void find_effect_variables(reshade::api::effect_runtime *runtime) {
     state->valid_variable = runtime->find_texture_variable("NeuralPass.fx", "NeuralPassValid");
     state->color_mode_variable = runtime->find_uniform_variable(
         "NeuralPass.fx", "NeuralPassColorMode");
+    // ReShade recreates the effect environment when a game switches from its
+    // loading presentation to the real swapchain (fullscreen transitions are
+    // a common example). Never carry a completed loading-screen tile into the
+    // new effect textures, even when the dimensions happen to be unchanged.
+    state->reset_requested = true;
+    std::lock_guard lock(state->mutex);
+    state->has_ready = false;
+    state->ready_styled.clear();
+    state->ready_valid.clear();
 }
 
 struct CaptureColorContract {

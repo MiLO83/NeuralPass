@@ -37,4 +37,15 @@ struct TemporalResult {
                                  const HistoryFrame &previous,
                                  float rejected_fraction = 0.82f);
 
+// Sticky screen-space history deliberately survives visual cuts. This lets a
+// paced fallback converge instead of restarting its progressive tile pass on
+// every sample during sustained camera motion. The first cut still clears
+// stale loading-screen output, and resolution changes always invalidate it.
+[[nodiscard]] bool should_reset_screen_history(
+    const Image<Color> &current,
+    const HistoryFrame &previous,
+    bool visual_cut,
+    bool previous_visual_cut,
+    bool sticky_history) noexcept;
+
 } // namespace neuralpass

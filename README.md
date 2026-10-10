@@ -421,7 +421,10 @@ backend without starting the game.
 - DirectML model execution, including the x86-to-x64 worker transport, has an automated NVIDIA smoke test on the development
   machine; AMD and Intel execution still require hardware validation.
 - The screen-space fallback cannot follow large camera motion as accurately as
-  engine motion vectors; changed pixels are invalidated and restyled instead.
+  engine motion vectors. Default sticky history clears stale output at an
+  effect-environment transition or the first visual cut, then preserves coverage
+  across sustained motion so a paced progressive pass can converge. Disable it
+  to invalidate on every detected cut instead.
 - Generic automatic HUD recognition is not yet reliable. A normalized manual
   exclusion rectangle is available in the shader UI.
 - ONNX tile inference currently uses CPU tensor upload/readback around the
