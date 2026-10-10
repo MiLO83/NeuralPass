@@ -2336,7 +2336,9 @@ void process_frames(RuntimeState *state, std::stop_token token) {
         if (adaptive_budget) {
             const auto target_fps = std::clamp(state->target_frame_rate.load(), 30u, 240u);
             budget_controller.configure({
-                .minimum_budget=0,
+                // Always admit one tile so a game whose baseline frame rate is
+                // below the selected target still converges to a coherent style.
+                .minimum_budget=1,
                 .maximum_budget=maximum_tile_budget,
                 .target_frame_time_ms=1000.0f / static_cast<float>(target_fps),
                 .recovery_samples=30});

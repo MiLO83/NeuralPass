@@ -160,9 +160,10 @@ persistent result; the interval is adjustable in the overlay. This keeps GPU
 copies and CPU color/surface decoding from dominating render cadence after tile
 inference has backed off.
 Adaptive budgeting is enabled by default: it sheds one tile immediately when
-smoothed frame pacing misses the selected target or capture work backs up, may
-suspend inference completely under pressure, and admits a probe tile only after
-30 healthy worker observations. The overlay exposes the target frame rate,
+smoothed frame pacing misses the selected target or capture work backs up, but
+retains one progressive tile so games below the selected target cannot strand a
+visible partial restyle forever. Additional tiles return only after 30 healthy
+worker observations. The overlay exposes the target frame rate,
 maximum and active tile counts, frame time, per-tile inference time, and pressure
 counter; disabling adaptation restores the selected fixed maximum.
 In the DirectML build, D3D11 uses the DirectML execution provider; other graphics

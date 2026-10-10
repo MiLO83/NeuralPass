@@ -153,6 +153,17 @@ static void test_adaptive_budget_sheds_pressure_and_recovers_slowly() {
     decision = controller.observe({.frame_time_ms=8.0f});
     require(decision.tile_budget == 1 && decision.changed,
             "suspended controller did not probe after sustained headroom");
+
+    AdaptiveTileBudgetController progressive({
+        .minimum_budget=1, .maximum_budget=4, .target_frame_time_ms=10.0f,
+        .recovery_samples=3});
+    progressive.reset(4);
+    for (int sample = 0; sample < 10; ++sample)
+        decision = progressive.observe({
+            .frame_time_ms=20.0f, .worker_time_ms=20.0f,
+            .attempted_tiles=1, .capture_backlog=true});
+    require(decision.tile_budget == 1,
+            "progressive minimum did not prevent permanent bootstrap starvation");
 }
 
 static void test_adaptive_budget_rejects_invalid_configuration() {
