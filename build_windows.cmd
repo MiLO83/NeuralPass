@@ -126,6 +126,7 @@ if errorlevel 1 (
 )
 if not exist "%NP_DIST%" mkdir "%NP_DIST%"
 if not exist "%NP_DIST%\reshade-shaders\Shaders" mkdir "%NP_DIST%\reshade-shaders\Shaders"
+if not exist "%NP_DIST%\third-party" mkdir "%NP_DIST%\third-party"
 
 copy /Y "%NP_BUILD%\Release\%NP_ADDON%" "%NP_DIST%\%NP_ADDON%" >nul
 if errorlevel 1 (
@@ -144,6 +145,7 @@ copy /Y "%NP_ROOT%\packaging\Diagnose NeuralPass.cmd" "%NP_DIST%\Diagnose Neural
 copy /Y "%NP_ROOT%\packaging\Install-NeuralPass.ps1" "%NP_DIST%\Install-NeuralPass.ps1" >nul
 copy /Y "%NP_ROOT%\packaging\Uninstall-NeuralPass.ps1" "%NP_DIST%\Uninstall-NeuralPass.ps1" >nul
 copy /Y "%NP_ROOT%\packaging\Diagnose-NeuralPass.ps1" "%NP_DIST%\Diagnose-NeuralPass.ps1" >nul
+copy /Y "%NP_ROOT%\external\reshade\LICENSE.md" "%NP_DIST%\third-party\ReShade-LICENSE.txt" >nul
 
 if /I "%NP_MODE%"=="directml" (
     copy /Y "%NP_ROOT%\external\onnxruntime\lib\onnxruntime.dll" "%NP_DIST%\onnxruntime.dll" >nul
@@ -161,7 +163,6 @@ if /I "%NP_MODE%"=="directml" (
     if not exist "%NP_DIST%\models\downloads" mkdir "%NP_DIST%\models\downloads"
     copy /Y "%NP_ROOT%\models\downloads\*.onnx" "%NP_DIST%\models\downloads\" >nul
     copy /Y "%NP_ROOT%\models\manifest.json" "%NP_DIST%\models\manifest.json" >nul
-    if not exist "%NP_DIST%\third-party" mkdir "%NP_DIST%\third-party"
     copy /Y "%NP_ORT_PACKAGE%\LICENSE" "%NP_DIST%\third-party\ONNXRuntime-LICENSE.txt" >nul
     copy /Y "%NP_ORT_PACKAGE%\ThirdPartyNotices.txt" "%NP_DIST%\third-party\ONNXRuntime-NOTICES.txt" >nul
     copy /Y "%NP_DML_PACKAGE%\LICENSE.txt" "%NP_DIST%\third-party\DirectML-LICENSE.txt" >nul

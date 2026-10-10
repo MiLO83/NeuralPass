@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import struct
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -24,7 +26,9 @@ REQUIRED = {
     "Uninstall-NeuralPass.ps1",
     "Diagnose-NeuralPass.ps1",
     "PACKAGE.json",
+    "SBOM.spdx.json",
     "SHA256SUMS.txt",
+    "third-party/ReShade-LICENSE.txt",
 }
 
 
@@ -43,6 +47,76 @@ def pe_machine(path: Path) -> int:
     return struct.unpack_from("<H", data, offset + 4)[0]
 
 
+def validate_provenance(metadata: dict) -> None:
+    revision = metadata.get("source_revision")
+    if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise SystemExit("PACKAGE.json has an invalid source revision")
+    epoch = metadata.get("source_date_epoch")
+    if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
+        raise SystemExit("PACKAGE.json has an invalid source epoch")
+    if not isinstance(metadata.get("source_dirty"), bool):
+        raise SystemExit("PACKAGE.json has an invalid source dirty flag")
+    created = datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if metadata.get("created_utc") != created:
+        raise SystemExit("PACKAGE.json timestamp does not match its source epoch")
+
+
+def validate_sbom(root: Path, metadata: dict, mode: str) -> None:
+    document = json.loads((root / "SBOM.spdx.json").read_text(encoding="utf-8"))
+    if document.get("spdxVersion") != "SPDX-2.3" or document.get("dataLicense") != "CC0-1.0":
+        raise SystemExit("SBOM is not an SPDX 2.3 JSON document")
+    expected_namespace = (
+        "https://github.com/MiLO83/NeuralPass/sbom/"
+        f"{metadata['source_revision']}/{metadata['architecture']}/{mode}"
+    )
+    if document.get("documentNamespace") != expected_namespace:
+        raise SystemExit("SBOM namespace does not match package provenance")
+    if document.get("creationInfo", {}).get("created") != metadata.get("created_utc"):
+        raise SystemExit("SBOM timestamp does not match package provenance")
+    packages = {item.get("name"): item for item in document.get("packages", [])}
+    required_packages = {"NeuralPass", "ReShade"}
+    if mode == "directml":
+        required_packages.update({"ONNX Runtime", "DirectML"})
+        manifest = json.loads((root / "models" / "manifest.json").read_text(encoding="utf-8"))
+        for model in manifest.get("models", []):
+            if (root / "models" / "downloads" / str(model["filename"])).is_file():
+                required_packages.add(f"ONNX Model Zoo fast-neural-style {model['id']}")
+    absent_packages = sorted(required_packages - packages.keys())
+    if absent_packages:
+        raise SystemExit("SBOM is missing packages: " + ", ".join(absent_packages))
+    expected_files = {
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*")
+        if path.is_file() and path.name not in {"SBOM.spdx.json", "SHA256SUMS.txt"}
+    }
+    spdx_files: dict[str, str] = {}
+    sha1_values: list[str] = []
+    for item in document.get("files", []):
+        relative = str(item.get("fileName", "")).removeprefix("./")
+        checksums = {
+            checksum.get("algorithm"): checksum.get("checksumValue")
+            for checksum in item.get("checksums", [])
+        }
+        if not relative or relative.startswith("/") or ".." in Path(relative).parts:
+            raise SystemExit(f"unsafe SBOM path: {relative}")
+        if relative in spdx_files or "SHA256" not in checksums:
+            raise SystemExit(f"invalid or duplicate SBOM file entry: {relative}")
+        spdx_files[relative] = str(checksums["SHA256"])
+    if set(spdx_files) != expected_files:
+        raise SystemExit("SBOM does not exactly cover package payload files")
+    for relative, checksum in spdx_files.items():
+        path = root / relative
+        if digest(path) != checksum:
+            raise SystemExit(f"SBOM checksum mismatch: {relative}")
+        sha1_values.append(hashlib.sha1(path.read_bytes()).hexdigest())
+    neuralpass = packages.get("NeuralPass", {})
+    verification = hashlib.sha1("".join(sorted(sha1_values)).encode("ascii")).hexdigest()
+    actual_verification = neuralpass.get("packageVerificationCode", {}).get(
+        "packageVerificationCodeValue")
+    if actual_verification != verification:
+        raise SystemExit("SBOM package verification code is invalid")
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: validate_package.py PACKAGE_DIRECTORY")
@@ -53,6 +127,7 @@ def main() -> int:
     metadata = json.loads((root / "PACKAGE.json").read_text(encoding="utf-8"))
     if metadata.get("format") != 1 or metadata.get("name") != "NeuralPass":
         raise SystemExit("invalid PACKAGE.json identity or format")
+    validate_provenance(metadata)
     architecture = metadata.get("architecture")
     addon = {"windows-x64": "NeuralPass.addon64",
              "windows-x86": "NeuralPass.addon32"}.get(architecture)
@@ -109,6 +184,7 @@ def main() -> int:
             raise SystemExit("preview package contains stale DirectML files: " + ", ".join(stale))
     else:
         raise SystemExit(f"unknown package mode: {mode}")
+    validate_sbom(root, metadata, mode)
     print(f"Package valid: {len(actual_files)} files, mode={mode}")
     return 0
 

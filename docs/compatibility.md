@@ -60,7 +60,7 @@ Run `Diagnose NeuralPass.cmd` beside the game executable. It creates
 
 - Windows, process architecture, display adapter, and driver information;
 - detected graphics proxy/runtime files with sizes and SHA-256 hashes;
-- package and installation-manifest presence;
+- package provenance, SPDX SBOM, checksums, and installation-manifest presence;
 - known safety markers at the game root; and
 - the last 120 lines of `ReShade.log` when available.
 

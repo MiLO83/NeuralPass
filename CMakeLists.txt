@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.21)
 project(NeuralPass VERSION 0.1.0 LANGUAGES CXX)
 
+if(MSVC)
+    add_link_options(/Brepro "/PDBALTPATH:%_PDB%")
+endif()
+
 option(NEURALPASS_BUILD_ADDON "Build the Windows ReShade add-on" ${WIN32})
 option(NEURALPASS_BUILD_TESTS "Build platform-neutral tests" ON)
 option(NEURALPASS_TEST_DIRECTML "Execute DirectML inference tests (requires a GPU adapter)" ON)
@@ -31,6 +35,9 @@ endif()
 
 if(NEURALPASS_BUILD_TESTS)
     enable_testing()
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME neuralpass_package_metadata
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/package_metadata_tests.py")
     add_executable(neuralpass_tests tests/core_tests.cpp)
     target_link_libraries(neuralpass_tests PRIVATE neuralpass_core)
     add_test(NAME neuralpass_core COMMAND neuralpass_tests)

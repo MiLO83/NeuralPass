@@ -27,7 +27,7 @@ $names = @(
     'd3d10.dll', 'd3d11.dll', 'd3d12.dll', 'opengl32.dll', 'onnxruntime.dll',
     'onnxruntime_providers_shared.dll', 'DirectML.dll', 'NeuralPass.install.json',
     'NeuralPassWorker.exe', 'NeuralPassHardwareTest.exe', 'NeuralPass-hardware-0.json',
-    'NeuralPass/PACKAGE.json', 'NeuralPass/SHA256SUMS.txt'
+    'NeuralPass/PACKAGE.json', 'NeuralPass/SBOM.spdx.json', 'NeuralPass/SHA256SUMS.txt'
 )
 foreach ($name in $names) {
     $path = Join-Path $target $name

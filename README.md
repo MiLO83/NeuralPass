@@ -75,6 +75,12 @@ Win32 runtime, so the add-on exchanges bounded tiles with that architecture-matc
 host through a private named pipe and an 8 MiB shared-memory mailbox. The fourth
 command remains useful when a fully self-contained non-neural Win32 preview is wanted.
 
+Every assembled package records the full source revision and its commit timestamp
+in `PACKAGE.json`, inventories the payload and dependencies in an SPDX 2.3
+`SBOM.spdx.json`, and covers the complete package (including the SBOM) with
+`SHA256SUMS.txt`. MSVC links use reproducible PE/PDB settings; builds from the same
+clean revision and inputs are expected to produce identical payload hashes.
+
 ### Manual build
 
 ```powershell

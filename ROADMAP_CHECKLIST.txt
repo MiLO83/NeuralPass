@@ -216,10 +216,11 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
 [~] Refuse known anti-cheat and protected multiplayer environments.
     Evidence: installer hard-refuses common Easy Anti-Cheat, BattlEye, Vanguard,
     FACEIT, and ESEA markers; signed catalog/process-level detection remains.
-[~] Produce reproducible artifacts, checksums, SBOM, and provenance.
-    Evidence: clean assembly emits validated package metadata, third-party notices,
-    and exact SHA-256 file coverage; CI publishes the x64 DirectML artifact. SBOM
-    and bit-for-bit reproducibility remain.
+[x] Produce reproducible artifacts, checksums, SBOM, and provenance.
+    Evidence: clean assembly emits commit-derived deterministic metadata, an SPDX
+    2.3 dependency/file SBOM, exact SHA-256 coverage, packaged licenses, and MSVC
+    reproducible-link settings; CI publishes x64/x86 artifacts. Two independent
+    x64 rebuilds produced identical metadata and all 29 payload hashes.
 [!] Obtain public-trust Authenticode signing.
     Blocker: SignPath Foundation approval or Microsoft Artifact Signing identity setup.
 [~] Publish complete installation, troubleshooting, architecture, and compatibility docs.

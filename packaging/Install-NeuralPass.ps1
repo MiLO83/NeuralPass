@@ -57,6 +57,7 @@ $entries = @(
     @{ Source = 'COMPATIBILITY.md'; Destination = 'NeuralPass/COMPATIBILITY.md' },
     @{ Source = 'THIRD_PARTY_NOTICES.md'; Destination = 'NeuralPass/THIRD_PARTY_NOTICES.md' },
     @{ Source = 'PACKAGE.json'; Destination = 'NeuralPass/PACKAGE.json' },
+    @{ Source = 'SBOM.spdx.json'; Destination = 'NeuralPass/SBOM.spdx.json' },
     @{ Source = 'SHA256SUMS.txt'; Destination = 'NeuralPass/SHA256SUMS.txt' },
     @{ Source = 'Install NeuralPass.cmd'; Destination = 'Install NeuralPass.cmd' },
     @{ Source = 'Uninstall NeuralPass.cmd'; Destination = 'Uninstall NeuralPass.cmd' },
