@@ -295,8 +295,11 @@ pipeline and render/depth attachments. Capture targets are explicitly transition
 into a three-slot buffer ring on ReShade's immediate command list; generic queue
 fences expose only completed slots without a normal-path CPU wait. Native
 render-pass draws, MSAA targets, and general source/replacement descriptor layouts,
-device-loss recovery, SwiftShader coverage, and real-driver
-game evidence remain promotion gates. The checked-in SPIR-V is generated from
+forced device-loss recovery, SwiftShader coverage, and real-driver
+game evidence remain promotion gates. The native x86/x64 runtime suite destroys
+its first logical device after a complete capture/replacement/readback workload,
+creates a fresh device, and repeats the workload to prove resource recreation.
+The checked-in SPIR-V is generated from
 `addon/shaders/vulkan_capture.frag`; a platform-neutral test instruments a real
 compiled vertex fixture, checks failure cases and the fragment-location link, and
 the transformed module passes SPIR-V Tools validation during development.

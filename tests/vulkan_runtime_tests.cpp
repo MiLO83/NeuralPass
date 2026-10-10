@@ -397,6 +397,7 @@ int run() {
         }
     require(queue_family != UINT32_MAX, "Vulkan device has no graphics queue");
 
+    const auto run_device_cycle = [&] {
     const float priority = 1.0f;
     VkDeviceQueueCreateInfo queue_info {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
     queue_info.queueFamilyIndex = queue_family;
@@ -869,9 +870,13 @@ int run() {
         vk.free_memory(device, image_memory[index].memory, nullptr);
     }
     vk.destroy_device(device, nullptr);
+    };
+
+    run_device_cycle();
+    run_device_cycle();
     vk.destroy_instance(instance, nullptr);
-    std::cout << "Native Vulkan instrumented capture and replacement isolation passed on "
-              << physical_properties.deviceName << '\n';
+    std::cout << "Native Vulkan instrumented capture, replacement isolation, and "
+                 "device recreation passed on " << physical_properties.deviceName << '\n';
     return 0;
 }
 

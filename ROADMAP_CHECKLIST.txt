@@ -121,10 +121,11 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     malformed/ambiguous modules, and SPIR-V Tools validation pass. Native x86/x64
     Vulkan driver tests execute the instrumented four-MRT pipeline and validate IDs,
     UVs, gradients, depth, fence/readback, and clone/covered-texel replacement isolation
-    on NVIDIA. A patched combined image-sampler variant captures source color;
+    on NVIDIA, then destroy and recreate the logical device and repeat the complete
+    workload. A patched combined image-sampler variant captures source color;
     transfer-source RGBA8/BGRA8 images gain coverage-row uploads and isolated
     bounded-table replacement. Full ReShade adapter replay, separate source descriptors,
-    device loss, AMD/Intel/SwiftShader, and real-game evidence remain.
+    forced device loss, AMD/Intel/SwiftShader, and real-game evidence remain.
 [~] Support indexed, non-indexed, instanced, and indirect draws.
     Evidence: D3D10 handles direct/indexed instanced draws (the API has no general
     indirect draw), and D3D11 handles direct and indirect indexed/non-indexed instanced draws,
@@ -262,8 +263,9 @@ Rule: An item receives [x] only with a passing test, commit, or release artifact
     the native D3D9 test performs an actual device Reset and proves replacement and
     capture after recreation, while D3D10/11/12 tests recreate capture at new
     dimensions without stale readback. Cache corruption is isolated, and native x64
-    plus x86-to-x64 tests recover from forced worker death. Forced GPU removal and
-    Vulkan device-recreation coverage remain.
+    plus x86-to-x64 tests recover from forced worker death. The native Vulkan x86/x64
+    workload destroys and recreates its logical device before repeating capture,
+    replacement, synchronization, and readback. Forced GPU removal remains.
 [ ] Steel Nomad D3D12 stress validation passes.
 [ ] Each API completes a 60-minute soak without crash or device removal.
 [ ] Clean-machine install, update, removal, and signature verification pass.
