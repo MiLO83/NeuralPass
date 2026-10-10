@@ -123,6 +123,14 @@ The package also includes hash-aware manifest-scoped uninstallation and a diagno
 report generator. Uninstall refuses to delete modified files unless you explicitly
 pass `-ForceModified` to the PowerShell script.
 
+To update, extract a newer architecture-matched package separately and run its
+`Update NeuralPass.cmd`, selecting the existing game directory. The updater verifies
+the complete new package, refuses modified/missing installed files by default,
+requires `UPDATE`, backs up the owned installation, invokes the guided installer,
+removes files owned only by the old release, and rolls back if replacement fails.
+Use `-ForceModified` only when intentionally replacing locally changed NeuralPass
+files. Verified optional models recognized by the new manifest are preserved.
+
 For a manual installation:
 
 1. Copy the architecture-matched `NeuralPass.addon64` or `NeuralPass.addon32`

@@ -46,6 +46,82 @@ try {
         throw 'model manager did not protect the assembled package from mutation'
     }
 
+    # Simulate a file owned by an older release, prove modified installs are
+    # rejected before mutation, then prove a verified update removes stale
+    # ownership while replacing the package atomically.
+    $staleRelative = 'NeuralPass/obsolete-preview.txt'
+    $stalePath = Join-Path $game $staleRelative
+    Set-Content -LiteralPath $stalePath -Value 'old release payload'
+    $manifest = Get-Content -LiteralPath $installManifestPath -Raw | ConvertFrom-Json
+    $manifest.files = @($manifest.files) + $staleRelative
+    $manifest.file_hashes | Add-Member -NotePropertyName $staleRelative `
+        -NotePropertyValue (Get-FileHash -LiteralPath $stalePath -Algorithm SHA256).Hash
+    $manifest | ConvertTo-Json -Depth 12 |
+        Set-Content -LiteralPath $installManifestPath -Encoding UTF8
+
+    $installedReadme = Join-Path $game 'NeuralPass/README.md'
+    Add-Content -LiteralPath $installedReadme -Value 'update refusal probe'
+    $modifiedRefused = $false
+    try {
+        & (Join-Path $packageRoot 'Update-NeuralPass.ps1') `
+            -TargetPath $game -Confirmation 'UPDATE'
+    } catch {
+        $modifiedRefused = $_.Exception.Message -match 'modified; refusing update'
+    }
+    if (-not $modifiedRefused -or -not (Test-Path -LiteralPath $stalePath)) {
+        throw 'updater did not refuse a modified install before changing files'
+    }
+    Copy-Item -LiteralPath (Join-Path $packageRoot 'README.md') `
+        -Destination $installedReadme -Force
+    & (Join-Path $packageRoot 'Update-NeuralPass.ps1') `
+        -TargetPath $game -Confirmation 'UPDATE'
+    $manifest = Get-Content -LiteralPath $installManifestPath -Raw | ConvertFrom-Json
+    $packageMetadata = Get-Content -LiteralPath (Join-Path $packageRoot 'PACKAGE.json') `
+        -Raw | ConvertFrom-Json
+    if ((Test-Path -LiteralPath $stalePath) -or
+        $staleRelative -in @($manifest.files) -or
+        $manifest.package.source_revision -cne $packageMetadata.source_revision) {
+        throw 'updater did not remove stale ownership or refresh package provenance'
+    }
+
+    # Force the nested installer to fail after overwriting earlier entries: make
+    # the installed update launcher appear unowned, while deliberately modifying
+    # README under -ForceModified. Rollback must recover that exact README and the
+    # pre-update manifest rather than leaving a half-updated installation.
+    $collisionRelative = 'Update NeuralPass.cmd'
+    $manifest.files = @($manifest.files | Where-Object {
+        [string]$_ -ine $collisionRelative
+    })
+    $manifest.file_hashes.PSObject.Properties.Remove($collisionRelative)
+    $manifest | ConvertTo-Json -Depth 12 |
+        Set-Content -LiteralPath $installManifestPath -Encoding UTF8
+    $manifestBeforeFailure = [IO.File]::ReadAllBytes($installManifestPath)
+    Add-Content -LiteralPath $installedReadme -Value 'rollback byte sentinel'
+    $rollbackTriggered = $false
+    try {
+        & (Join-Path $packageRoot 'Update-NeuralPass.ps1') `
+            -TargetPath $game -Confirmation 'UPDATE' -ForceModified
+    } catch {
+        $rollbackTriggered = $_.Exception.Message -match 'not owned by NeuralPass'
+    }
+    $manifestAfterFailure = [IO.File]::ReadAllBytes($installManifestPath)
+    $readmeAfterFailure = Get-Content -LiteralPath $installedReadme -Raw
+    if (-not $rollbackTriggered -or
+        [Convert]::ToBase64String($manifestBeforeFailure) -cne
+            [Convert]::ToBase64String($manifestAfterFailure) -or
+        $readmeAfterFailure -notmatch 'rollback byte sentinel') {
+        throw 'updater did not restore exact owned files and manifest after replacement failure'
+    }
+    Copy-Item -LiteralPath (Join-Path $packageRoot 'README.md') `
+        -Destination $installedReadme -Force
+    $manifest = Get-Content -LiteralPath $installManifestPath -Raw | ConvertFrom-Json
+    $manifest.files = @($manifest.files) + $collisionRelative
+    $collisionPath = Join-Path $game $collisionRelative
+    $manifest.file_hashes | Add-Member -NotePropertyName $collisionRelative `
+        -NotePropertyValue (Get-FileHash -LiteralPath $collisionPath -Algorithm SHA256).Hash
+    $manifest | ConvertTo-Json -Depth 12 |
+        Set-Content -LiteralPath $installManifestPath -Encoding UTF8
+
     $vulkanValidator = Join-Path $game 'Validate-NeuralPassVulkan.ps1'
     $vulkanProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$vulkanValidator`"") `

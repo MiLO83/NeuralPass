@@ -55,6 +55,15 @@ notices are installed below the game's `NeuralPass` directory so generic game
 files such as `README.md` and `LICENSE.txt` are never overwritten. Installation
 also stops before copying if an unowned destination file would be replaced.
 
+For an update, extract the new package outside the game and run its
+`Update NeuralPass.cmd` against the existing game directory. The updater verifies
+every package checksum, requires the installed and incoming architectures to match,
+refuses missing or modified owned files unless `-ForceModified` is explicit, and
+requires the exact `UPDATE` confirmation. It backs up the prior owned payload,
+rolls back a failed replacement, removes files owned only by the old release, and
+preserves optional models only when the new manifest recognizes their filename and
+exact hash. It does not fetch releases or silently update a game.
+
 ## Diagnostics
 
 Run `Diagnose NeuralPass.cmd` beside the game executable. It creates

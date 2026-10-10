@@ -108,9 +108,11 @@ $entries = @(
     @{ Source = 'SHA256SUMS.txt'; Destination = 'NeuralPass/SHA256SUMS.txt' },
     @{ Source = 'Install NeuralPass.cmd'; Destination = 'Install NeuralPass.cmd' },
     @{ Source = 'Uninstall NeuralPass.cmd'; Destination = 'Uninstall NeuralPass.cmd' },
+    @{ Source = 'Update NeuralPass.cmd'; Destination = 'Update NeuralPass.cmd' },
     @{ Source = 'Diagnose NeuralPass.cmd'; Destination = 'Diagnose NeuralPass.cmd' },
     @{ Source = 'Install-NeuralPass.ps1'; Destination = 'Install-NeuralPass.ps1' },
     @{ Source = 'Uninstall-NeuralPass.ps1'; Destination = 'Uninstall-NeuralPass.ps1' },
+    @{ Source = 'Update-NeuralPass.ps1'; Destination = 'Update-NeuralPass.ps1' },
     @{ Source = 'Diagnose-NeuralPass.ps1'; Destination = 'Diagnose-NeuralPass.ps1' }
 )
 foreach ($optional in @('onnxruntime.dll', 'onnxruntime_providers_shared.dll', 'DirectML.dll')) {

@@ -54,6 +54,8 @@ $names = @(
     'NeuralPass/runtime/NeuralPassHardwareTest.exe',
     'NeuralPass/runtime/NeuralPassWorkerHealthTest.exe', 'NeuralPass-hardware-0.json',
     'NeuralPass-worker-health.json',
+    'Update NeuralPass.cmd', 'Update-NeuralPass.ps1',
+    'Manage NeuralPass Models.cmd', 'Manage-NeuralPassModels.ps1',
     'NeuralPassVulkanTest.exe', 'NeuralPass-vulkan-runtime.json',
     'NeuralPass/PACKAGE.json', 'NeuralPass/SBOM.spdx.json', 'NeuralPass/SHA256SUMS.txt'
 )

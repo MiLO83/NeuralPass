@@ -150,9 +150,11 @@ copy /Y "%NP_ROOT%\docs\compatibility.md" "%NP_DIST%\COMPATIBILITY.md" >nul
 copy /Y "%NP_ROOT%\THIRD_PARTY_NOTICES.md" "%NP_DIST%\THIRD_PARTY_NOTICES.md" >nul
 copy /Y "%NP_ROOT%\packaging\Install NeuralPass.cmd" "%NP_DIST%\Install NeuralPass.cmd" >nul
 copy /Y "%NP_ROOT%\packaging\Uninstall NeuralPass.cmd" "%NP_DIST%\Uninstall NeuralPass.cmd" >nul
+copy /Y "%NP_ROOT%\packaging\Update NeuralPass.cmd" "%NP_DIST%\Update NeuralPass.cmd" >nul
 copy /Y "%NP_ROOT%\packaging\Diagnose NeuralPass.cmd" "%NP_DIST%\Diagnose NeuralPass.cmd" >nul
 copy /Y "%NP_ROOT%\packaging\Install-NeuralPass.ps1" "%NP_DIST%\Install-NeuralPass.ps1" >nul
 copy /Y "%NP_ROOT%\packaging\Uninstall-NeuralPass.ps1" "%NP_DIST%\Uninstall-NeuralPass.ps1" >nul
+copy /Y "%NP_ROOT%\packaging\Update-NeuralPass.ps1" "%NP_DIST%\Update-NeuralPass.ps1" >nul
 copy /Y "%NP_ROOT%\packaging\Diagnose-NeuralPass.ps1" "%NP_DIST%\Diagnose-NeuralPass.ps1" >nul
 copy /Y "%NP_ROOT%\packaging\Validate NeuralPass Vulkan.cmd" "%NP_DIST%\Validate NeuralPass Vulkan.cmd" >nul
 copy /Y "%NP_ROOT%\packaging\Validate-NeuralPassVulkan.ps1" "%NP_DIST%\Validate-NeuralPassVulkan.ps1" >nul
